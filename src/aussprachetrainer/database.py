@@ -26,6 +26,25 @@ class HistoryManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # Migration check: Ensure all columns exist
+            cursor = conn.execute("PRAGMA table_info(history)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            required_columns = {
+                'text': 'TEXT NOT NULL DEFAULT ""',
+                'ipa': 'TEXT',
+                'audio_path': 'TEXT',
+                'mode': 'TEXT',
+                'voice_id': 'TEXT',
+                'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+            }
+            
+            for col, definition in required_columns.items():
+                if col not in existing_columns:
+                    print(f"DEBUG: Adding missing column {col} to history table")
+                    conn.execute(f"ALTER TABLE history ADD COLUMN {col} {definition}")
+            
             conn.commit()
 
     def add_entry(self, text: str, ipa: str, audio_path: str, mode: str, voice_id: str):

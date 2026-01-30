@@ -1,9 +1,13 @@
 [project]
 name = "aussprachetrainer"
 version = "0.1.0"
-description = "Minimal German Pronunciation Trainer"
+description = "A premium German pronunciation trainer specialized for dialects (DE, AT, CH)."
+authors = [
+    { name = "m-amir-gomaa", email = "m-amir-gomaa@github.com" },
+]
 readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
 dependencies = [
     "pyttsx3",
     "gTTS",
@@ -11,7 +15,12 @@ dependencies = [
     "numpy",
     "sounddevice",
     "SpeechRecognition",
+    "pocketsphinx",
 ]
+
+[project.urls]
+Homepage = "https://github.com/m-amir-gomaa/aussprachetrainer"
+Repository = "https://github.com/m-amir-gomaa/aussprachetrainer"
 
 [project.scripts]
 aussprachetrainer = "aussprachetrainer.main:main"
@@ -19,3 +28,6 @@ aussprachetrainer = "aussprachetrainer.main:main"
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+aussprachetrainer = ["resources/*"]

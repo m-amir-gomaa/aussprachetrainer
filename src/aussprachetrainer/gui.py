@@ -5,6 +5,13 @@ from typing import List, Dict, Optional
 from aussprachetrainer.backend import PronunciationBackend
 from aussprachetrainer.autocomplete import WordSuggester
 
+# Dialect mapping
+DIALECTS = {
+    "Germany (Standard)": "de-DE",
+    "Austria": "de-AT",
+    "Switzerland": "de-CH"
+}
+
 # Set appearance and color theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -15,9 +22,10 @@ class HistoryItem(ctk.CTkFrame):
         self.entry_id = entry_id
         self.audio_path = audio_path
         
-        # Text and IPA
+        # Text and IPA with wraplength to prevent overflow
         self.label = ctk.CTkLabel(self, text=f"\"{text}\" \n[{ipa}]", 
                                   anchor="w", justify="left",
+                                  wraplength=200, # Ensure buttons remain visible
                                   font=ctk.CTkFont(size=font_size-2))
         self.label.pack(side="left", fill="x", expand=True, padx=10, pady=5)
         
@@ -46,17 +54,24 @@ class App(ctk.CTk):
         self.suggester = WordSuggester()
         
         # Window Setup
-        self.title("GermanPronun Advanced")
+        self.title("Aussprachetrainer")
         self.geometry("1100x700")
+        self.attributes("-fullscreen", True) # Default to fullscreen
+        self.is_fullscreen = True
         
-        # Layout
-        self.grid_columnconfigure(1, weight=3)
-        self.grid_columnconfigure(2, weight=2)
-        self.grid_rowconfigure(0, weight=1)
-        
+        # Use tkinter PanedWindow for resizability
+        import tkinter as tk
+        self.paned = tk.PanedWindow(self, orient="horizontal", bg="#1A1A1A", bd=0, sashwidth=4)
+        self.paned.pack(fill="both", expand=True)
+
         self._create_sidebar()
         self._create_main_area()
         self._create_history_panel()
+
+        # Add to paned window
+        self.paned.add(self.sidebar, width=220)
+        self.paned.add(self.main_frame, width=530)
+        self.paned.add(self.history_frame, width=350)
         
         # Autocomplete State
         self.suggestions = []
@@ -69,13 +84,20 @@ class App(ctk.CTk):
         # Global Bindings
         self.bind('<Control-Return>', lambda e: self.generate())
         self.bind('<F5>', lambda e: self.generate())
+        self.bind('<F11>', lambda e: self.toggle_fullscreen())
+        self.bind('<Escape>', lambda e: self._handle_escape(e))
+
+    def _handle_escape(self, event):
+        if self.is_fullscreen:
+            self.toggle_fullscreen()
+        self._close_suggestions()
 
     def _create_sidebar(self):
-        self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(10, weight=1)
+        self.sidebar = ctk.CTkFrame(self.paned, corner_radius=0)
+        # We don't grid it here anymore, paned.add handles it
+        self.sidebar.grid_columnconfigure(0, weight=1)
         
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="GermanPronun", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo_label = ctk.CTkLabel(self.sidebar, text="Aussprachetrainer", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         
         # Settings Section
@@ -83,29 +105,43 @@ class App(ctk.CTk):
         
         # Font Size
         ctk.CTkLabel(self.sidebar, text="Font Size:", anchor="w").grid(row=2, column=0, padx=20, sticky="w")
-        self.font_slider = ctk.CTkSlider(self.sidebar, from_=10, to_=30, number_of_steps=20, command=self._update_font_size)
+        self.font_slider = ctk.CTkSlider(self.sidebar, from_=10, to=30, number_of_steps=20, command=self._update_font_size)
         self.font_slider.set(self.font_size)
         self.font_slider.grid(row=3, column=0, padx=20, pady=(0, 10))
         
         # Mode Toggle
-        ctk.CTkLabel(self.sidebar, text="Mode:", anchor="w").grid(row=4, column=0, padx=20, sticky="w")
+        ctk.CTkLabel(self.sidebar, text="Connection:", anchor="w").grid(row=4, column=0, padx=20, sticky="w")
         self.mode_switch = ctk.CTkOptionMenu(self.sidebar, values=["Online", "Offline"], dynamic_resizing=False)
         self.mode_switch.grid(row=5, column=0, padx=20, pady=(0, 10))
         
-        # Voice Selection
-        ctk.CTkLabel(self.sidebar, text="Voice (Offline):", anchor="w").grid(row=6, column=0, padx=20, sticky="w")
-        self.voice_option = ctk.CTkOptionMenu(self.sidebar, values=["Loading..."], dynamic_resizing=False)
-        self.voice_option.grid(row=7, column=0, padx=20, pady=(0, 10))
+        # Dialect Selection
+        ctk.CTkLabel(self.sidebar, text="German Dialect:", anchor="w").grid(row=6, column=0, padx=20, sticky="w")
+        self.dialect_option = ctk.CTkOptionMenu(self.sidebar, values=list(DIALECTS.keys()), 
+                                              command=self._on_dialect_change)
+        self.dialect_option.grid(row=7, column=0, padx=20, pady=(0, 10))
         
-        # Transparency Info
-        ctk.CTkLabel(self.sidebar, text="--- SYSTEM INFO ---", text_color="gray").grid(row=8, column=0, pady=(20, 5))
-        self.model_info = ctk.CTkLabel(self.sidebar, text="TTS: gTTS / espeak\nASR: Google / Vosk", 
-                                       font=ctk.CTkFont(size=10), justify="left")
-        self.model_info.grid(row=9, column=0, padx=20, sticky="w")
+        # Voice Selection
+        ctk.CTkLabel(self.sidebar, text="Voice (Offline):", anchor="w").grid(row=8, column=0, padx=20, sticky="w")
+        self.voice_option = ctk.CTkOptionMenu(self.sidebar, values=["Loading..."], dynamic_resizing=False)
+        self.voice_option.grid(row=9, column=0, padx=20, pady=(0, 10))
+
+        # Fullscreen Toggle
+        self.fs_button = ctk.CTkButton(self.sidebar, text="Toggle Fullscreen (F11)", command=self.toggle_fullscreen)
+        self.fs_button.grid(row=10, column=0, padx=20, pady=10)
+        
+        # System Info & Tokens
+        ctk.CTkLabel(self.sidebar, text="--- SYSTEM INFO ---", text_color="gray").grid(row=11, column=0, pady=(20, 5))
+        self.token_label = ctk.CTkLabel(self.sidebar, text="Tokens Remaining: ∞", 
+                                        font=ctk.CTkFont(size=12, weight="bold"), text_color="#44FF44")
+        self.token_label.grid(row=12, column=0, padx=20, sticky="w")
+        
+        self.api_info = ctk.CTkLabel(self.sidebar, text="API: Local / Google (Free)\nKey: [NOT REQUIRED]", 
+                                       font=ctk.CTkFont(size=10), justify="left", text_color="#888888")
+        self.api_info.grid(row=13, column=0, padx=20, sticky="w")
 
     def _create_main_area(self):
-        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        self.main_frame = ctk.CTkFrame(self.paned, corner_radius=0, fg_color="transparent")
+        # Paned.add handles it
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
         
@@ -119,7 +155,8 @@ class App(ctk.CTk):
         self.input_text.bind('<KeyRelease>', self._on_key_release)
         self.input_text.bind('<Tab>', self._on_tab_press)
         self.input_text.bind('<Return>', self._on_return_press)
-        self.input_text.bind('<Escape>', self._close_suggestions)
+        self.input_text.bind('<Control-a>', self._select_all)
+        self.input_text.bind('<Control-A>', self._select_all)
         
         # Action Buttons
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -153,8 +190,8 @@ class App(ctk.CTk):
         self.status_label.grid(row=5, column=0, sticky="w")
 
     def _create_history_panel(self):
-        self.history_frame = ctk.CTkFrame(self, width=350)
-        self.history_frame.grid(row=0, column=2, sticky="nsew", padx=(0, 20), pady=20)
+        self.history_frame = ctk.CTkFrame(self.paned, width=350)
+        # Paned.add handles it
         self.history_frame.grid_rowconfigure(2, weight=1)
         
         self.history_label = ctk.CTkLabel(self.history_frame, text="History Buffer", font=ctk.CTkFont(size=16, weight="bold"))
@@ -173,11 +210,15 @@ class App(ctk.CTk):
     def _load_voices(self):
         voices = self.backend.get_voices()
         self.voices_map = {v['name']: v['id'] for v in voices}
-        de_voices = [v['name'] for v in voices if v['is_german']]
-        other_voices = [v['name'] for v in voices if not v['is_german']]
-        sorted_names = de_voices + other_voices
-        self.voice_option.configure(values=sorted_names)
-        if de_voices: self.voice_option.set(de_voices[0])
+        voice_names = [v['name'] for v in voices]
+        self.voice_option.configure(values=voice_names if voice_names else ["Default"])
+        if voice_names: self.voice_option.set(voice_names[0])
+        else: self.voice_option.set("Default")
+
+    def _on_dialect_change(self, dialect_name):
+        code = DIALECTS.get(dialect_name, "de-DE")
+        self.backend.set_dialect(code)
+        self.status_label.configure(text=f"Switched to {dialect_name}", text_color="green")
 
     def _update_font_size(self, val):
         self.font_size = int(val)
@@ -187,6 +228,16 @@ class App(ctk.CTk):
         self.record_button.configure(font=new_font)
         self._refresh_history()
 
+    def toggle_fullscreen(self):
+        self.is_fullscreen = not self.is_fullscreen
+        self.attributes("-fullscreen", self.is_fullscreen)
+        if not self.is_fullscreen:
+            self.geometry("1100x700")
+
+    def _select_all(self, event=None):
+        self.input_text.tag_add("sel", "1.0", "end")
+        return "break"
+
     def generate(self):
         text = self.input_text.get("1.0", "end-1c").strip()
         if not text: return
@@ -195,40 +246,64 @@ class App(ctk.CTk):
         
         self.status_label.configure(text="Generating...", text_color="blue")
         def work():
-            ipa = self.backend.get_ipa(text)
-            filepath = self.backend.generate_audio(text, online=is_online, voice_id=voice_id)
-            self.backend.db.add_entry(text, ipa, filepath, self.mode_switch.get(), voice_id)
-            self.after(0, lambda: self.ipa_display.configure(text=ipa))
-            self.after(0, self._refresh_history)
-            self.backend.play_file(filepath)
-            self.after(0, lambda: self.status_label.configure(text="Ready", text_color="gray"))
+            try:
+                ipa = self.backend.get_ipa(text)
+                filepath = self.backend.generate_audio(text, online=is_online, voice_id=voice_id)
+                if filepath:
+                    self.backend.db.add_entry(text, ipa, filepath, self.mode_switch.get(), voice_id)
+                    # Learn new words for autocomplete
+                    for word in text.split():
+                        self.suggester.add_to_history(word)
+                    
+                    self.after(0, lambda: self.ipa_display.configure(text=ipa))
+                    self.after(0, self._refresh_history)
+                    # Play file in this background thread
+                    self.backend.play_file(filepath)
+                else:
+                    self.after(0, lambda: self.status_label.configure(text="Generation Failed", text_color="red"))
+            except Exception as e:
+                print(f"DEBUG: GUI Generate Thread Error: {e}")
+                self.after(0, lambda: self.status_label.configure(text="Error occurred", text_color="red"))
+            finally:
+                self.after(0, lambda: self.status_label.configure(text="Ready", text_color="gray"))
         threading.Thread(target=work, daemon=True).start()
 
     def toggle_recording(self):
         if not self.backend.recording:
-            self.backend.start_recording()
-            self.record_button.configure(text="⏹ Stop Recording", fg_color="#AA4444")
-            self.status_label.configure(text="Recording...", text_color="red")
+            try:
+                self.backend.start_recording()
+                self.record_button.configure(text="⏹ Stop Recording", fg_color="#AA4444")
+                self.status_label.configure(text="Recording...", text_color="red")
+            except Exception as e:
+                self.status_label.configure(text=f"Mic Error: {e}", text_color="red")
         else:
             wav_path = self.backend.stop_recording()
             self.record_button.configure(text="🎤 Start Recording", fg_color="#338833")
-            self.status_label.configure(text="Assessing...", text_color="blue")
             
+            if not wav_path:
+                self.status_label.configure(text="No audio recorded", text_color="red")
+                return
+
+            self.status_label.configure(text="Assessing...", text_color="blue")
             target = self.input_text.get("1.0", "end-1c").strip()
             online = self.mode_switch.get() == "Online"
             
             def assess():
-                result = self.backend.assess_pronunciation(target, wav_path, online=online)
-                self.after(0, lambda: self._show_assessment(result))
+                try:
+                    result = self.backend.assess_pronunciation(target, wav_path, online=online)
+                    self.after(0, lambda: self._show_assessment(result))
+                except Exception as e:
+                    self.after(0, lambda: self.status_label.configure(text=f"ASR Error: {e}", text_color="red"))
             threading.Thread(target=assess, daemon=True).start()
 
     def _show_assessment(self, result):
         if "error" in result:
             self.assess_label.configure(text=f"Error: {result['error']}", text_color="red")
         else:
-            self.assess_label.configure(text=f"Score: {result['score']}%", 
-                                        text_color="#44FF44" if result['score'] > 80 else "#FFFF44")
-            self.transcription_label.configure(text=f"You said: {result['actual']}")
+            score = result.get('score', 0)
+            self.assess_label.configure(text=f"Score: {score}%", 
+                                        text_color="#44FF44" if score > 80 else "#FFFF44")
+            self.transcription_label.configure(text=f"You said: {result.get('actual', '')}")
         self.status_label.configure(text="Ready", text_color="gray")
 
     def _refresh_history(self):
@@ -259,14 +334,16 @@ class App(ctk.CTk):
             self.suggestion_window = ctk.CTkToplevel(self)
             self.suggestion_window.overrideredirect(True)
             self.suggestion_window.attributes("-topmost", True)
-            self.suggestion_frame = ctk.CTkFrame(self.suggestion_window, border_width=1)
+            # Use a slightly different background for the "glass" effect
+            self.suggestion_frame = ctk.CTkFrame(self.suggestion_window, border_width=2, border_color="#555555", fg_color="#1A1A1A")
             self.suggestion_frame.pack(fill="both", expand=True)
 
         for w in self.suggestion_frame.winfo_children(): w.destroy()
         self.suggestion_labels = []
         for i, s in enumerate(self.suggestions):
-            lbl = ctk.CTkLabel(self.suggestion_frame, text=s, anchor="w", padx=10)
-            lbl.pack(fill="x")
+            lbl = ctk.CTkLabel(self.suggestion_frame, text=s, anchor="w", padx=10, height=30, 
+                               font=ctk.CTkFont(size=self.font_size-1))
+            lbl.pack(fill="x", padx=2, pady=1)
             self.suggestion_labels.append(lbl)
         self.suggestion_index = -1
         self._position_suggestions()
