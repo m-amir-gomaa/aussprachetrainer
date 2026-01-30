@@ -1,0 +1,21 @@
+[project]
+name = "aussprachetrainer"
+version = "0.1.0"
+description = "Minimal German Pronunciation Trainer"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyttsx3",
+    "gTTS",
+    "customtkinter",
+    "numpy",
+    "sounddevice",
+    "SpeechRecognition",
+]
+
+[project.scripts]
+aussprachetrainer = "aussprachetrainer.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
