@@ -1,65 +1,100 @@
 import os
-from typing import List
+import math
+from typing import List, Set, Dict, Optional
+from aussprachetrainer.trie import Trie
+from aussprachetrainer.hunspell_wrapper import HunspellWrapper
+from aussprachetrainer.ranking import RankingEngine
+from aussprachetrainer.text_engine_wrapper import TextEngine
 
-TOP_WORDS = [
-    "der", "die", "das", "und", "ist", "in", "den", "von", "zu", "mit", "sich", "auf", "für", "nicht", "ein", "eine", "als", "auch", "es", "an", "werden", "aus", "er", "hat", "dass", "sie", "nach", "wird", "bei", "einer", "um", "am", "vor", "noch", "wie", "dem", "durch", "man", "nur", "einen", "sei", "sein", "war", "haben", "kann", "alle", "immer", "doch", "müssen", "würden", "können", "solche", "dieser", "ihre", "sagt", "über", "wir", "unter", "gegen", "damit", "würde", "keine", "schon", "sondern", "da", "diese", "seine", "oder", "ihr", "wollen", "geht", "jetzt", "muss", "ganz", "drei", "recht", "etwas", "dort", "vielleicht", "machte", "mensch", "leben", "zeit", "deutsch", "land", "stadt", "wo", "gut", "sehen", "sagen", "kommen", "gehen", "finden", "stehen", "lassen", "bleiben", "nehmen", "halten", "zeigen", "bringen", "fragen", "wissen", "meinen", "glauben", "denken", "ab", "aber", "allem", "allen", "aller", "alles", "also", "anderer", "anderem", "anderen", "anderes", "andere", "bin", "bis", "bist", "damit", "dann", "dein", "deine", "deinem", "deinen", "deiner", "deines", "dem", "denn", "des", "dessen", "dich", "dies", "die", "diesem", "diesen", "dieser", "dieses", "dir", "du", "einem", "einigen", "einiger", "einiges", "einmal", "euch", "euer", "eure", "eurem", "euren", "eurer", "eures", "gegen", "gewesen", "habe", "hier", "hin", "hinter", "ich", "ihm", "ihn", "ihrem", "ihren", "ihrer", "ihres", "im", "indem", "ins", "ja", "jede", "jedem", "jeden", "jeder", "jedes", "jener", "jenem", "jenen", "jenes", "kein", "keine", "keinem", "keinen", "keiner", "keines", "könnte", "machen", "manche", "manchem", "manchen", "mancher", "manches", "mein", "meine", "meinem", "meinen", "meiner", "meines", "nichts", "nun", "ob", "ohne", "sehr", "selbst", "sind", "so", "solchem", "solchen", "solcher", "solches", "soll", "sollen", "sollte", "sonst", "viel", "vom", "war", "waren", "warst", "was", "weg", "weil", "weiter", "welche", "welchem", "welchen", "welcher", "welches", "wenn", "wer", "werde", "wieder", "will", "wirst", "wollte", "während", "zwischen"
-]
-
-class WordSuggester:
+class GermanSuggester:
     def __init__(self, history_limit: int = 1000):
-        self.common_words = set()
-        self.history = []
+        self.resources_dir = os.path.join(os.path.dirname(__file__), "resources")
+        self.dict_dir = os.path.join(self.resources_dir, "dicts")
+        
+        # Paths
+        dic_path = os.path.join(self.dict_dir, "de_DE.dic")
+        aff_path = os.path.join(self.dict_dir, "de_DE.aff")
+        freq_path = os.path.join(self.resources_dir, "top10000de.txt")
+        history_path = os.path.join(self.resources_dir, "user_history_de.txt")
+        
+        # Components
+        self.trie_py = Trie() 
+        self.text_engine = TextEngine()
+        self.hunspell = HunspellWrapper(dic_path, aff_path)
+        self.ranking = RankingEngine(freq_path)
+        
+        self.history: Set[str] = set()
         self.history_limit = history_limit
-        self.popularity_map = {word.lower(): i for i, word in enumerate(TOP_WORDS)}
-        self._load_words()
+        self.history_path = history_path
+        
+        self._load_dictionary(dic_path)
+        self._load_history()
 
-    def _load_words(self):
-        words_file = os.path.join(os.path.dirname(__file__), "resources", "words_de.txt")
-        if os.path.exists(words_file):
-            print(f"DEBUG: Loading words from {words_file}")
-            try:
-                with open(words_file, "r", encoding="utf-8") as f:
-                    self.common_words = {line.strip() for line in f if line.strip()}
-            except UnicodeDecodeError:
-                print("DEBUG: UTF-8 decoding failed, falling back to latin-1")
-                with open(words_file, "r", encoding="latin-1") as f:
-                    # Clean words while loading
-                    self.common_words = {line.strip() for line in f if line.strip() and len(line.strip()) > 1}
-            print(f"DEBUG: Loaded {len(self.common_words)} words")
-        else:
-            self.common_words = set(TOP_WORDS)
+    def _load_dictionary(self, dic_path: str):
+        if not os.path.exists(dic_path): return
+        
+        try:
+            with open(dic_path, "r", encoding="utf-8", errors="ignore") as f:
+                next(f, None)
+                for line in f:
+                    parts = line.strip().split('/')
+                    word = parts[0]
+                    if word and len(word) > 1:
+                        rank = self.ranking.frequencies.get(word.lower(), 10000)
+                        frequency_score = math.log((10001 - rank) + 1)
+                        
+                        self.trie_py.insert(word)
+                        self.text_engine.insert_word(word, frequency_score)
+        except Exception as e:
+            print(f"DEBUG: Error loading dictionary: {e}")
+
+    def _load_history(self):
+        if not os.path.exists(self.history_path): return
+        try:
+            with open(self.history_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    word = line.strip()
+                    if word:
+                        self.history.add(word)
+                        self.text_engine.insert_word(word, 100.0) # High priority
+        except Exception as e:
+            print(f"DEBUG: Error loading history: {e}")
 
     def add_to_history(self, word: str):
         if not word or word in self.history: return
-        self.history.insert(0, word)
-        if len(self.history) > self.history_limit: self.history.pop()
+        self.history.add(word)
+        self.text_engine.insert_word(word, 100.0)
+        try:
+            with open(self.history_path, "a", encoding="utf-8") as f:
+                f.write(word + "\n")
+        except: pass
+
+    def suggest(self, prefix: str) -> List[str]:
+        return self.get_suggestions(prefix)
 
     def get_suggestions(self, prefix: str) -> List[str]:
         if not prefix: return []
         p_lower = prefix.lower()
-        candidates = []
-
-        # 1. From history
-        for w in self.history:
-            if w.lower().startswith(p_lower):
-                candidates.append((w, -1)) # Highest priority
-
-        # 2. From common words
-        for w in self.common_words:
-            if w.lower().startswith(p_lower):
-                # Rank: TOP_WORDS index if present, else length (shorter is better), then alphabetical
-                rank = self.popularity_map.get(w.lower(), 1000 + len(w))
-                candidates.append((w, rank))
         
-        # Sort by rank, then alphabetical
-        candidates.sort(key=lambda x: (x[1], x[0].lower()))
+        # 1. High Performance Path (C Engine)
+        if self.text_engine.is_available():
+            return self.text_engine.search_ranked(p_lower)
         
-        # Unique results while preserving order
-        seen = set()
-        results = []
-        for word, _ in candidates:
-            if word not in seen:
-                results.append(word)
-                seen.add(word)
-                if len(results) >= 10: break
-        return results
+        # 2. Fallback Path (Python)
+        candidates: List[tuple[str, float]] = []
+        seen_words: Set[str] = set()
+        
+        lemmas = self.trie_py.search_prefix(p_lower)
+        for lemma in lemmas:
+            forms = self.hunspell.expand_lemma(lemma)
+            for word in forms:
+                if word.lower().startswith(p_lower) and word not in seen_words:
+                    score = self.ranking.score(word, prefix, is_lemma=(word == lemma), is_history=(word in self.history))
+                    candidates.append((word, score))
+                    seen_words.add(word)
+        
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return [c[0] for c in candidates[:10]]
+
+# Backward compatibility
+WordSuggester = GermanSuggester

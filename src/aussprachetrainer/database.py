@@ -49,6 +49,10 @@ class HistoryManager:
 
     def add_entry(self, text: str, ipa: str, audio_path: str, mode: str, voice_id: str):
         with sqlite3.connect(self.db_path) as conn:
+            # Deduplication: Delete existing entry with the same text
+            # This ensures that duplicates are removed and the "fresh" one is at the top
+            conn.execute("DELETE FROM history WHERE text = ?", (text,))
+            
             conn.execute(
                 "INSERT INTO history (text, ipa, audio_path, mode, voice_id) VALUES (?, ?, ?, ?, ?)",
                 (text, ipa, audio_path, mode, voice_id)

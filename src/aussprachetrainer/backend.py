@@ -9,9 +9,14 @@ import time
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
+import socket
 from gtts import gTTS
+try:
+    from kokoro_onnx import Kokoro
+except ImportError:
+    Kokoro = None
 from typing import List, Dict, Optional
-from difflib import SequenceMatcher
+from rapidfuzz import distance
 from aussprachetrainer.database import HistoryManager
 
 class PronunciationBackend:
@@ -22,6 +27,10 @@ class PronunciationBackend:
         self.db = HistoryManager()
         # Session audio dir
         self.session_dir = tempfile.mkdtemp(prefix="aussprachetrainer_")
+        
+        # Piper models directory
+        self.models_dir = os.path.expanduser("~/.local/share/aussprachetrainer/models")
+        os.makedirs(self.models_dir, exist_ok=True)
         
         # Dialect state
         self.dialect = "de-DE" # Standard German, de-AT, de-CH
@@ -54,6 +63,39 @@ class PronunciationBackend:
             return voice_list
         except: return []
 
+    def check_internet(self) -> bool:
+        """Check if internet connection is available"""
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=2)
+            return True
+        except OSError:
+            return False
+
+    def get_online_voices(self) -> List[Dict[str, str]]:
+        """Get available gTTS voices/accents for German"""
+        return [
+            {'id': 'de', 'name': 'German (Standard)'},
+            {'id': 'de-at', 'name': 'German (Austria)'},
+            {'id': 'de-ch', 'name': 'German (Switzerland)'},
+        ]
+
+    def get_offline_voices(self) -> List[Dict[str, str]]:
+        """Get available Kokoro, Piper and espeak-ng voices for German"""
+        voices = [
+            # Kokoro Neural Voices (Highest Quality)
+            {'id': 'kokoro:de_male', 'name': 'Kokoro German (Male)'},
+            {'id': 'kokoro:de_female', 'name': 'Kokoro German (Female)'},
+            # Piper Neural Voices (High Quality)
+            {'id': 'piper:de_DE-thorsten-high', 'name': 'Piper Thorsten (High)'},
+            {'id': 'piper:de_DE-thorsten-medium', 'name': 'Piper Thorsten (Medium)'},
+            {'id': 'piper:de_DE-karlsson-low', 'name': 'Piper Karlsson (Low)'},
+            # Espeak-ng fallback voices
+            {'id': 'de', 'name': 'espeak German (Standard)'},
+            {'id': 'de+m3', 'name': 'espeak German (Male 3)'},
+            {'id': 'de+f2', 'name': 'espeak German (Female 2)'},
+        ]
+        return voices
+
     def get_ipa(self, text: str) -> str:
         try:
             result = subprocess.run(
@@ -64,19 +106,27 @@ class PronunciationBackend:
         except:
             return ""
 
-    def generate_audio(self, text: str, online: bool = False, voice_id: str = None) -> str:
-        print(f"DEBUG: Generating audio for '{text}', online={online}")
+    def generate_audio(self, text: str, online: bool = False, voice_id: str = None, online_voice: str = None) -> str:
+        print(f"DEBUG: Generating audio for '{text}', online={online}, voice_id={voice_id}")
         ext = ".mp3" if online else ".wav"
-        filename = f"audio_{hash(text + str(online) + str(voice_id))}{ext}"
+        # Include voice in hash for caching
+        cache_key = f"{text}_{online}_{voice_id}_{online_voice}"
+        filename = f"audio_{hash(cache_key)}{ext}"
         filepath = os.path.join(self.session_dir, filename)
         
         if os.path.exists(filepath):
-            print(f"DEBUG: Using cached audio at {filepath}")
             return filepath
 
         try:
-            if online: self._generate_online(text, filepath)
-            else: filepath = self._generate_offline(text, filepath, voice_id)
+            if online: 
+                self._generate_online(text, filepath, online_voice)
+            else: 
+                if voice_id and voice_id.startswith("kokoro:"):
+                    filepath = self._generate_kokoro(text, filepath, voice_id)
+                elif voice_id and voice_id.startswith("piper:"):
+                    filepath = self._generate_piper(text, filepath, voice_id.split(":")[1])
+                else:
+                    filepath = self._generate_offline(text, filepath, voice_id)
             print(f"DEBUG: Audio generated at {filepath}")
         except Exception as e:
             print(f"DEBUG: Audio generation failed: {e}")
@@ -84,12 +134,132 @@ class PronunciationBackend:
         
         return filepath
 
+    def is_piper_available(self) -> bool:
+        """Check if any Piper models are present."""
+        if not os.path.exists(self.models_dir): return False
+        return any(f.endswith(".onnx") for f in os.listdir(self.models_dir))
+
+    def get_missing_models(self) -> List[str]:
+        """Return list of supported models that are not downloaded."""
+        piper_supported = ["de_DE-thorsten-high", "de_DE-thorsten-medium", "de_DE-karlsson-low"]
+        missing = []
+        for m in piper_supported:
+            if not os.path.exists(os.path.join(self.models_dir, f"{m}.onnx")):
+                missing.append(f"piper:{m}")
+        
+        # Kokoro
+        if not os.path.exists(os.path.join(self.models_dir, "kokoro-v0_19.onnx")):
+            missing.append("kokoro:model")
+        if not os.path.exists(os.path.join(self.models_dir, "voices.json")):
+            missing.append("kokoro:voices")
+            
+        return missing
+
+    def download_kokoro_model(self, progress_callback=None):
+        """Download Kokoro ONNX model and voices.json."""
+        # Note: These URLs need to be valid. Kokoro-82M on HuggingFace is common.
+        # This is a placeholder for actual Kokoro model URLs.
+        files = {
+            "kokoro-v0_19.onnx": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v0_19.onnx",
+            "voices.json": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices.json"
+        }
+        
+        for f, url in files.items():
+            dest = os.path.join(self.models_dir, f)
+            if not os.path.exists(dest):
+                print(f"DEBUG: Downloading {url} to {dest}")
+                if progress_callback: progress_callback(f"Downloading {f}...")
+                try:
+                    subprocess.run(['curl', '-L', '-o', dest, url], check=True)
+                except Exception as e:
+                    print(f"DEBUG: Failed to download {f}: {e}")
+                    if progress_callback: progress_callback(f"Failed: {f}")
+                    return False
+        if progress_callback: progress_callback("Kokoro ready!")
+        return True
+
+    def download_piper_model(self, model_name: str, progress_callback=None):
+        """Download a piper model and its config."""
+        base_url = "https://github.com/rhasspy/piper-voices/releases/download/v1.0.0/"
+        files = [f"{model_name}.onnx", f"{model_name}.onnx.json"]
+        
+        for f in files:
+            url = base_url + f
+            dest = os.path.join(self.models_dir, f)
+            if not os.path.exists(dest):
+                print(f"DEBUG: Downloading {url} to {dest}")
+                if progress_callback: progress_callback(f"Downloading {f}...")
+                try:
+                    subprocess.run(['curl', '-L', '-o', dest, url], check=True)
+                except Exception as e:
+                    print(f"DEBUG: Failed to download {f}: {e}")
+                    if progress_callback: progress_callback(f"Failed: {f}")
+                    return False
+        if progress_callback: progress_callback("Voice ready!")
+        return True
+
+    def _generate_kokoro(self, text: str, filepath: str, voice_id: str) -> str:
+        """Generate audio using Kokoro neural TTS."""
+        if Kokoro is None:
+            print("DEBUG: kokoro-onnx not installed")
+            return self._generate_piper(text, filepath, "de_DE-thorsten-medium")
+            
+        model_path = os.path.join(self.models_dir, "kokoro-v0_19.onnx")
+        voice_path = os.path.join(self.models_dir, "voices.json")
+        
+        if not os.path.exists(model_path):
+            print(f"DEBUG: Kokoro model not found at {model_path}")
+            return self._generate_piper(text, filepath, "de_DE-thorsten-medium")
+
+        try:
+            kokoro = Kokoro(model_path, voice_path)
+            # Kokoro voice IDs are like 'de_male' or 'de_female'
+            # We map our voice_id to kokoro's
+            v_map = {
+                "kokoro:de_male": "de_male",
+                "kokoro:de_female": "de_female"
+            }
+            v = v_map.get(voice_id, "de_male")
+            samples, sample_rate = kokoro.create(text, voice=v, speed=1.0, lang="de")
+            
+            import soundfile as sf
+            sf.write(filepath, samples, sample_rate)
+        except Exception as e:
+            print(f"DEBUG: Kokoro failed: {e}")
+            return self._generate_piper(text, filepath, "de_DE-thorsten-medium")
+            
+        return filepath
+
+    def _generate_piper(self, text: str, filepath: str, model_name: str) -> str:
+        """Generate audio using Piper neural TTS."""
+        model_path = os.path.join(self.models_dir, f"{model_name}.onnx")
+        if not os.path.exists(model_path):
+            print(f"DEBUG: Piper model {model_name} not found, falling back to espeak")
+            return self._generate_offline(text, filepath)
+        
+        cmd = ['piper', '-m', model_path, '-f', filepath]
+        print(f"DEBUG: Running Piper TTS: {' '.join(cmd)}")
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc.communicate(input=text.encode('utf-8'))
+            if proc.returncode != 0:
+                raise Exception(f"Piper failed with return code {proc.returncode}")
+        except Exception as e:
+            print(f"DEBUG: Piper failed: {e}, falling back to espeak")
+            return self._generate_offline(text, filepath)
+        
+        return filepath
+
     def _generate_offline(self, text: str, filepath: str, voice_id: str = None):
         # espeak-ng only does wav natively with -w
         if not filepath.endswith('.wav'): filepath = filepath.replace('.mp3', '.wav')
-        # Use voice_id if provided, else dialect-based default
-        v = voice_id if voice_id else self._get_espeak_voice()
-        cmd = ['espeak-ng', '-v', v, '-w', filepath, text]
+        # Use voice_id if provided, else dialect-based default with male variant
+        v = voice_id if voice_id else self._get_espeak_voice() + "+m3"  # m3 is a male variant
+        # Improved parameters for better quality:
+        # -s 150: slightly slower speed for clarity
+        # -p 50: normal pitch
+        # -a 100: normal amplitude
+        cmd = ['espeak-ng', '-v', v, '-s', '150', '-p', '50', '-a', '100', '-w', filepath, text]
         print(f"DEBUG: Running offline TTS: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -97,9 +267,17 @@ class PronunciationBackend:
             raise Exception(f"espeak-ng failed: {result.stderr}")
         return filepath
 
-    def _generate_online(self, text: str, filepath: str):
-        print(f"DEBUG: Running online TTS (gTTS)")
-        gTTS(text=text, lang='de').save(filepath)
+    def _generate_online(self, text: str, filepath: str, voice_accent: str = None):
+        print(f"DEBUG: Running online TTS (gTTS) with accent={voice_accent}")
+        # Use specified accent/tld or default to 'de'
+        tld = voice_accent if voice_accent else 'de'
+        # gTTS uses tld parameter for different accents
+        if tld == 'de-at':
+            gTTS(text=text, lang='de', tld='at').save(filepath)
+        elif tld == 'de-ch':
+            gTTS(text=text, lang='de', tld='ch').save(filepath)
+        else:
+            gTTS(text=text, lang='de').save(filepath)
 
     def play_file(self, filepath: str):
         if not filepath or not os.path.exists(filepath):
@@ -171,13 +349,31 @@ class PronunciationBackend:
         except Exception as e:
             return {"error": f"ASR failed: {e}"}
             
-        if not recognized_text: return {"error": "Could not recognize speech"}
+        if not recognized_text or recognized_text.startswith("["): 
+            return {"error": recognized_text if recognized_text else "Could not recognize speech"}
         
-        score = SequenceMatcher(None, target_text.lower(), recognized_text.lower()).ratio()
+        # Calculate scores
+        # 1. Text-based score (fuzzy match)
+        text_score = distance.Levenshtein.normalized_similarity(target_text.lower(), recognized_text.lower())
+        
+        # 2. Phoneme-based score (IPA distance)
+        target_ipa = self.get_ipa(target_text)
+        actual_ipa = self.get_ipa(recognized_text)
+        
+        if target_ipa and actual_ipa:
+            # We use normalized Levenshtein on IPA strings for stricter phonetic assessment
+            ipa_score = distance.Levenshtein.normalized_similarity(target_ipa, actual_ipa)
+            # Weighted combine: IPA counts more for "strictness"
+            combined_score = (0.3 * text_score) + (0.7 * ipa_score)
+        else:
+            combined_score = text_score
+
         return {
             "target": target_text,
             "actual": recognized_text,
-            "score": int(score * 100)
+            "score": int(combined_score * 100),
+            "target_ipa": target_ipa,
+            "actual_ipa": actual_ipa
         }
 
     def _transcribe_online(self, audio_path: str) -> str:
@@ -194,15 +390,11 @@ class PronunciationBackend:
         with sr.AudioFile(audio_path) as source:
             audio = r.record(source)
         try:
-            # SpeechRecognition has built-in support for pocketsphinx
-            return r.recognize_pocketsphinx(audio, language=self.dialect)
+            lang = self.dialect.split('-')[0]
+            return r.recognize_pocketsphinx(audio, language=lang)
         except sr.UnknownValueError:
-            return "[Could not understand audio]"
+            return "[Offline ASR: No speech detected or not understood]"
         except sr.RequestError as e:
-            return f"[Pocketsphinx error: {e}]"
-        except:
-            # Fallback if specific dialect model is missing
-            try:
-                return r.recognize_pocketsphinx(audio)
-            except:
-                return "[Offline ASR failed]"
+            return f"[Offline ASR: Pocketsphinx error (missing {self.dialect} model?)]"
+        except Exception as e:
+            return f"[Offline ASR failed: {str(e)}]"

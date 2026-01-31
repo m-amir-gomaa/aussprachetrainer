@@ -2,8 +2,15 @@ import customtkinter as ctk
 import threading
 import os
 from typing import List, Dict, Optional
-from aussprachetrainer.backend import PronunciationBackend
-from aussprachetrainer.autocomplete import WordSuggester
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = None
+    ImageTk = None
+from .backend import PronunciationBackend
+from .autocomplete import GermanSuggester
+from .config import ConfigManager
+from .text_engine_wrapper import TextEngine, ACTION_BOLD, ACTION_ITALIC, ACTION_UNDER, ACTION_UNDO, ACTION_REDO, ACTION_SELECT_ALL, ACTION_DELETE_WORD, ACTION_DELETE_WORD_BACK
 
 # Dialect mapping
 DIALECTS = {
@@ -12,73 +19,186 @@ DIALECTS = {
     "Switzerland": "de-CH"
 }
 
+# Premium "Mocha-inspired" Theme
+THEME = {
+    "bg": "#1e1e2e",           # Dark Mocha background
+    "sidebar_bg": "#11111b",   # Deeper Crust background
+    "fg": "#cdd6f4",           # Soft white foreground
+    "accent": "#fab387",       # Peach accent
+    "header_fg": "#f5e0dc",    # Rosewater for secondary headers
+    "muted": "#585b70",        # Surface2 for muted text
+    "green": "#a6e3a1",        # Green for success
+    "blue": "#89b4fa",         # Blue for info
+    "red": "#f38ba8",          # Red for delete/danger
+    "border": "#313244",       # Surface0 for subtle borders
+    "card_bg": "#181825"        # Mantle for cards
+}
+
 # Set appearance and color theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+class SectionHeader(ctk.CTkFrame):
+    def __init__(self, master, text, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.grid_columnconfigure(0, weight=1)
+        
+        inner_frame = ctk.CTkFrame(self, fg_color="transparent")
+        inner_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(20, 5))
+        inner_frame.grid_columnconfigure(1, weight=1)
+        
+        # Small accent block on the left
+        self.accent_block = ctk.CTkFrame(inner_frame, width=4, height=14, fg_color=THEME["accent"], corner_radius=2)
+        self.accent_block.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        
+        self.label = ctk.CTkLabel(inner_frame, text=text.upper(), 
+                                  font=ctk.CTkFont(size=11, weight="bold"),
+                                  text_color=THEME["fg"])
+        self.label.grid(row=0, column=1, sticky="w")
+        
+        self.line = ctk.CTkFrame(self, height=1, fg_color=THEME["border"])
+        self.line.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+
 class HistoryItem(ctk.CTkFrame):
-    def __init__(self, master, entry_id, text, ipa, audio_path, play_callback, delete_callback, font_size, **kwargs):
-        super().__init__(master, **kwargs)
+    def __init__(self, master, entry_id, text, ipa, audio_path, play_callback, delete_callback, click_callback, font_size, **kwargs):
+        super().__init__(master, fg_color=THEME["card_bg"], border_width=1, border_color=THEME["border"], corner_radius=8, **kwargs)
         self.entry_id = entry_id
         self.audio_path = audio_path
+        self.text = text
         
-        # Text and IPA with wraplength to prevent overflow
-        self.label = ctk.CTkLabel(self, text=f"\"{text}\" \n[{ipa}]", 
+        self.configure(cursor="hand2")
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Content container for text and IPA
+        content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        content_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
+        content_frame.grid_columnconfigure(0, weight=1)
+        
+        self.label = ctk.CTkLabel(content_frame, text=f"\"{text}\"", 
                                   anchor="w", justify="left",
-                                  wraplength=200, # Ensure buttons remain visible
-                                  font=ctk.CTkFont(size=font_size-2))
-        self.label.pack(side="left", fill="x", expand=True, padx=10, pady=5)
+                                  font=ctk.CTkFont(size=font_size-1, weight="bold"),
+                                  text_color=THEME["fg"])
+        self.label.grid(row=0, column=0, sticky="w")
         
-        # Action Buttons Frame
+        self.ipa_label = ctk.CTkLabel(content_frame, text=f"/{ipa}/", 
+                                      anchor="w", justify="left",
+                                      font=ctk.CTkFont(size=font_size-3),
+                                      text_color=THEME["blue"])
+        self.ipa_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        
+        # Bind click events
+        for widget in [self, self.label, self.ipa_label, content_frame]:
+            widget.bind("<Button-1>", lambda e: click_callback(self.text))
+        
+        # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(side="right", padx=5)
+        btn_frame.grid(row=0, column=1, padx=10, sticky="e")
 
-        # Play Button
-        self.play_button = ctk.CTkButton(btn_frame, text="▶", width=30, 
+        self.play_button = ctk.CTkButton(btn_frame, text="▶", width=32, height=32,
+                                         fg_color="transparent", text_color=THEME["green"],
+                                         hover_color=THEME["border"], font=ctk.CTkFont(size=14),
                                          command=lambda: play_callback(self.audio_path))
         self.play_button.pack(side="left", padx=2)
         
-        # Delete Button
-        self.delete_button = ctk.CTkButton(btn_frame, text="🗑", width=30, fg_color="#AA4444", 
-                                           hover_color="#CC6666",
+        self.delete_button = ctk.CTkButton(btn_frame, text="🗑", width=32, height=32,
+                                           fg_color="transparent", text_color=THEME["red"],
+                                           hover_color=THEME["border"], font=ctk.CTkFont(size=14),
                                            command=lambda: delete_callback(self.entry_id, self))
         self.delete_button.pack(side="left", padx=2)
+
+    def update_wraplength(self, width):
+        # Dynamically adjust wraplength based on available width minus button space
+        new_wrap = max(50, width - 100)
+        self.label.configure(wraplength=new_wrap)
 
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         
+        # Config Manager
+        self.config = ConfigManager()
+        
         # State
-        self.font_size = 14
+        self.font_size = self.config.get("font_size")
+        self.font_family = self.config.get("font_family")
+        self.is_fullscreen = self.config.get("is_fullscreen")
+        self.window_state = self.config.get("window_state")
+        
+        self.auto_switch_mode = self.config.get("auto_switch_mode") if self.config.get("auto_switch_mode") is not None else True
+        self.connection_mode = self.config.get("connection_mode") or "Online"
+        self.online_voice = self.config.get("online_voice") or "de"
+        self.offline_voice = self.config.get("offline_voice") or "de+m3"
         self.backend = PronunciationBackend()
-        self.suggester = WordSuggester()
+        self.suggester = GermanSuggester()
+        self.text_engine = TextEngine()
+        
+        # Root-level font permission fix
+        self._fix_font_permissions()
+        
+        # Flag image
+        try:
+            from PIL import Image
+            flag_img_path = os.path.join(os.path.dirname(__file__), "resources", "flag.png")
+            if os.path.exists(flag_img_path):
+                self.flag_image = ctk.CTkImage(light_image=Image.open(flag_img_path),
+                                               dark_image=Image.open(flag_img_path),
+                                               size=(32, 24))
+            else:
+                self.flag_image = None
+        except Exception as e:
+            print(f"DEBUG: Failed to load flag image: {e}")
+            self.flag_image = None
         
         # Window Setup
         self.title("Aussprachetrainer")
-        self.geometry("1100x700")
-        self.attributes("-fullscreen", True) # Default to fullscreen
-        self.is_fullscreen = True
+        
+        # Restore window geometry from config or use defaults
+        width = self.config.get("window_width")
+        height = self.config.get("window_height")
+        x = self.config.get("window_x")
+        y = self.config.get("window_y")
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        
+        if self.window_state == "zoomed":
+            self.after(100, lambda: self.state('zoomed'))
+            
+        self.attributes("-fullscreen", self.is_fullscreen)
+        
+        # Register cleanup handler
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
         
         # Use tkinter PanedWindow for resizability
         import tkinter as tk
-        self.paned = tk.PanedWindow(self, orient="horizontal", bg="#1A1A1A", bd=0, sashwidth=4)
+        # sashwidth and sashpad for better grab area on Linux
+        # We'll use a visible sash color to help the user find it
+        self.paned = tk.PanedWindow(self, orient="horizontal", bd=0, 
+                                   sashwidth=4, sashpad=0, sashrelief="flat",
+                                   bg=THEME["border"], opaqueresize=True)
         self.paned.pack(fill="both", expand=True)
+
+        # Init Autocomplete State EARLY to prevent crashes during component creation
+        self.suggestions = []
+        self.suggestion_index = -1
+        self.suggestion_window = None
+        self.suggestion_timer = None
+        # Autocomplete debounce time in ms
+        self.autocomplete_debounce_ms = 600
 
         self._create_sidebar()
         self._create_main_area()
         self._create_history_panel()
 
-        # Add to paned window
-        self.paned.add(self.sidebar, width=220)
-        self.paned.add(self.main_frame, width=530)
-        self.paned.add(self.history_frame, width=350)
+        # Premium Default Widths (Sidebar: 380px, History: 420px)
+        sidebar_w = self.config.get("sidebar_width") or 380
+        history_w = self.config.get("history_panel_width") or 420
+
+        self.paned.add(self.sidebar, width=sidebar_w, stretch="never", minsize=200)
+        self.paned.add(self.main_frame, stretch="always", minsize=400)
+        self.paned.add(self.history_frame, width=history_w, stretch="never", minsize=200)
+
         
-        # Autocomplete State
-        self.suggestions = []
-        self.suggestion_index = -1
-        self.suggestion_window = None
         
-        self._load_voices()
+        self._apply_persisted_settings()
         self._refresh_history()
         
         # Global Bindings
@@ -86,6 +206,69 @@ class App(ctk.CTk):
         self.bind('<F5>', lambda e: self.generate())
         self.bind('<F11>', lambda e: self.toggle_fullscreen())
         self.bind('<Escape>', lambda e: self._handle_escape(e))
+        self.bind('<Configure>', self._on_window_configure)
+
+    def _fix_font_permissions(self):
+        """Ensure font files are writable by the current user to avoid CTk errors."""
+        font_dir = os.path.expanduser("~/.fonts")
+        if os.path.exists(font_dir):
+            try:
+                import stat
+                for f in os.listdir(font_dir):
+                    fpath = os.path.join(font_dir, f)
+                    if os.path.isfile(fpath):
+                        current = os.stat(fpath).st_mode
+                        os.chmod(fpath, current | stat.S_IWUSR | stat.S_IRUSR)
+            except Exception as e:
+                print(f"DEBUG: Font permission fix failed: {e}")
+
+    def _apply_persisted_settings(self):
+        # Apply saved mode
+        saved_mode = self.config.get("mode")
+        if saved_mode and saved_mode in ["Online", "Offline"]:
+            self.mode_switch.set(saved_mode)
+        elif self.auto_switch_mode:
+            self.mode_switch.set("Auto")
+        
+        # Apply saved dialect
+        saved_dialect = self.config.get("dialect")
+        if saved_dialect and saved_dialect in DIALECTS:
+            self.dialect_option.set(saved_dialect)
+            self.backend.set_dialect(DIALECTS[saved_dialect])
+        
+        self._apply_font()
+
+    def _on_window_configure(self, event):
+        if event.widget == self:
+            # Update window state
+            state = self.state()
+            if state != self.window_state:
+                self.window_state = state
+                self.config.set("window_state", state)
+                
+            # We delay the saving slightly to ensure layout is finished
+            self.after(200, self._save_pane_widths)
+            self.after(50, self._update_history_wraplengths)
+
+    def _save_pane_widths(self):
+        try:
+            # Check winfo_width of the actual widgets in the PanedWindow
+            sw = self.sidebar.winfo_width()
+            hw = self.history_frame.winfo_width()
+            if sw > 50 and hw > 50:
+                self.config.set("sidebar_width", sw)
+                self.config.set("history_panel_width", hw)
+        except: pass
+
+    def _update_history_wraplengths(self):
+        try:
+            # Get width of history scroll frame
+            width = self.history_scroll.winfo_width()
+            if width < 50: return 
+            for item in self.history_scroll.winfo_children():
+                if isinstance(item, HistoryItem):
+                    item.update_wraplength(width)
+        except: pass
 
     def _handle_escape(self, event):
         if self.is_fullscreen:
@@ -93,117 +276,241 @@ class App(ctk.CTk):
         self._close_suggestions()
 
     def _create_sidebar(self):
-        self.sidebar = ctk.CTkFrame(self.paned, corner_radius=0)
-        # We don't grid it here anymore, paned.add handles it
+        self.sidebar = ctk.CTkFrame(self, corner_radius=0, fg_color=THEME["sidebar_bg"])
         self.sidebar.grid_columnconfigure(0, weight=1)
         
-        self.logo_label = ctk.CTkLabel(self.sidebar, text="Aussprachetrainer", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        # Centered Logo Block
+        logo_container = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        logo_container.grid(row=0, column=0, padx=20, pady=(50, 40), sticky="ew")
+        logo_container.grid_columnconfigure(0, weight=1)
         
-        # Settings Section
-        ctk.CTkLabel(self.sidebar, text="--- SETTINGS ---", text_color="gray").grid(row=1, column=0, pady=(20, 5))
+        logo_inner = ctk.CTkFrame(logo_container, fg_color="transparent")
+        logo_inner.grid(row=0, column=0)
         
+        if self.flag_image:
+            flag_label = ctk.CTkLabel(logo_inner, text="", image=self.flag_image)
+            flag_label.grid(row=0, column=0, padx=(0, 15))
+        else:
+            flag_label = ctk.CTkLabel(logo_inner, text="🇩🇪", font=ctk.CTkFont(size=32))
+            flag_label.grid(row=0, column=0, padx=(0, 15))
+        
+        self.logo_label = ctk.CTkLabel(logo_inner, text="Aussprache", 
+                                       font=ctk.CTkFont(family=self.font_family, size=24, weight="bold"),
+                                       text_color=THEME["fg"])
+        self.logo_label.grid(row=0, column=1)
+        
+        self.logo_label_accent = ctk.CTkLabel(logo_inner, text="trainer", 
+                                              font=ctk.CTkFont(family=self.font_family, size=24, weight="bold"),
+                                              text_color=THEME["accent"])
+        self.logo_label_accent.grid(row=0, column=2)
+        
+        # Appearance header
+        SectionHeader(self.sidebar, "Appearance").grid(row=2, column=0, sticky="ew")
+
+        # Font Family
+        popular_fonts = [
+            "Inter", "Roboto", "Ubuntu", "Open Sans", "Lato", 
+            "Montserrat", "Oswald", "Source Sans Pro", "Raleway", "PT Sans", 
+            "Noto Sans", "Nunito", "Playfair Display", "Merriweather", "Lora", 
+            "PT Serif", "Fira Code", "JetBrains Mono", "Inconsolata", "Courier Prime"
+        ]
+        ctk.CTkLabel(self.sidebar, text="Font Family", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=3, column=0, padx=25, pady=(10, 0), sticky="w")
+        self.font_option = ctk.CTkOptionMenu(self.sidebar, values=popular_fonts, command=self._on_font_family_change,
+                                            fg_color=THEME["bg"], button_color=THEME["bg"], button_hover_color=THEME["border"])
+        self.font_option.set(self.font_family)
+        self.font_option.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="ew")
+
         # Font Size
-        ctk.CTkLabel(self.sidebar, text="Font Size:", anchor="w").grid(row=2, column=0, padx=20, sticky="w")
-        self.font_slider = ctk.CTkSlider(self.sidebar, from_=10, to=30, number_of_steps=20, command=self._update_font_size)
+        ctk.CTkLabel(self.sidebar, text="Font Size", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=5, column=0, padx=25, pady=(5, 0), sticky="w")
+        self.font_slider = ctk.CTkSlider(self.sidebar, from_=10, to=30, number_of_steps=20, 
+                                         command=self._update_font_size,
+                                         button_color=THEME["accent"], progress_color=THEME["accent"])
         self.font_slider.set(self.font_size)
-        self.font_slider.grid(row=3, column=0, padx=20, pady=(0, 10))
+        self.font_slider.grid(row=6, column=0, padx=20, pady=(0, 15), sticky="ew")
+
+        # Connection Header
+        SectionHeader(self.sidebar, "Connection").grid(row=7, column=0, sticky="ew")
         
-        # Mode Toggle
-        ctk.CTkLabel(self.sidebar, text="Connection:", anchor="w").grid(row=4, column=0, padx=20, sticky="w")
-        self.mode_switch = ctk.CTkOptionMenu(self.sidebar, values=["Online", "Offline"], dynamic_resizing=False)
-        self.mode_switch.grid(row=5, column=0, padx=20, pady=(0, 10))
+        # Mode Toggle with Auto-Switch
+        ctk.CTkLabel(self.sidebar, text="Connection Mode", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=8, column=0, padx=25, pady=(10, 0), sticky="w")
+        self.mode_switch = ctk.CTkOptionMenu(self.sidebar, values=["Auto", "Online", "Offline"], dynamic_resizing=False, command=self._on_mode_change,
+                                            fg_color=THEME["bg"], button_color=THEME["bg"], button_hover_color=THEME["border"])
+        self.mode_switch.set("Auto" if self.auto_switch_mode else self.connection_mode)
+        self.mode_switch.grid(row=9, column=0, padx=20, pady=(0, 15), sticky="ew")
         
         # Dialect Selection
-        ctk.CTkLabel(self.sidebar, text="German Dialect:", anchor="w").grid(row=6, column=0, padx=20, sticky="w")
+        ctk.CTkLabel(self.sidebar, text="German Dialect", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=10, column=0, padx=25, pady=(5, 0), sticky="w")
         self.dialect_option = ctk.CTkOptionMenu(self.sidebar, values=list(DIALECTS.keys()), 
-                                              command=self._on_dialect_change)
-        self.dialect_option.grid(row=7, column=0, padx=20, pady=(0, 10))
+                                              command=self._on_dialect_change, dynamic_resizing=False,
+                                              fg_color=THEME["bg"], button_color=THEME["bg"], button_hover_color=THEME["border"])
+        # Set saved dialect
+        if self.config.get("dialect") in DIALECTS:
+            self.dialect_option.set(self.config.get("dialect"))
+        else:
+            self.dialect_option.set(list(DIALECTS.keys())[0]) # Default to first if not set
+        self.dialect_option.grid(row=11, column=0, padx=20, pady=(0, 15), sticky="ew")
         
-        # Voice Selection
-        ctk.CTkLabel(self.sidebar, text="Voice (Offline):", anchor="w").grid(row=8, column=0, padx=20, sticky="w")
-        self.voice_option = ctk.CTkOptionMenu(self.sidebar, values=["Loading..."], dynamic_resizing=False)
-        self.voice_option.grid(row=9, column=0, padx=20, pady=(0, 10))
+        # Online Voice Selection
+        ctk.CTkLabel(self.sidebar, text="Online Voice", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=12, column=0, padx=25, pady=(5, 0), sticky="w")
+        online_voices = self.backend.get_online_voices()
+        online_voice_names = [v['name'] for v in online_voices]
+        self.online_voice_map = {v['name']: v['id'] for v in online_voices}
+        self.online_voice_option = ctk.CTkOptionMenu(self.sidebar, values=online_voice_names, dynamic_resizing=False, command=self._on_online_voice_change,
+                                                   fg_color=THEME["bg"], button_color=THEME["bg"], button_hover_color=THEME["border"])
+        # Set saved voice
+        for name, vid in self.online_voice_map.items():
+            if vid == self.online_voice:
+                self.online_voice_option.set(name)
+                break
+        self.online_voice_option.grid(row=13, column=0, padx=20, pady=(0, 15), sticky="ew")
+        
+        # Offline Voice Selection
+        ctk.CTkLabel(self.sidebar, text="Offline Voice", anchor="w", font=ctk.CTkFont(size=11), text_color=THEME["muted"]).grid(row=14, column=0, padx=25, pady=(5, 0), sticky="w")
+        
+        voice_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        voice_frame.grid(row=15, column=0, padx=20, pady=(0, 15), sticky="ew")
+        voice_frame.grid_columnconfigure(0, weight=1)
+
+        offline_voices = self.backend.get_offline_voices()
+        offline_voice_names = [v['name'] for v in offline_voices]
+        self.offline_voice_map = {v['name']: v['id'] for v in offline_voices}
+        self.offline_voice_option = ctk.CTkOptionMenu(voice_frame, values=offline_voice_names, dynamic_resizing=False, command=self._on_offline_voice_change,
+                                                    fg_color=THEME["bg"], button_color=THEME["bg"], button_hover_color=THEME["border"])
+        # Set saved voice
+        for name, vid in self.offline_voice_map.items():
+            if vid == self.offline_voice:
+                self.offline_voice_option.set(name)
+                break
+        self.offline_voice_option.grid(row=0, column=0, sticky="ew")
+        
+        self.dl_btn = ctk.CTkButton(voice_frame, text="⬇️", width=30, command=self._on_download_voices,
+                                    fg_color=THEME["bg"], hover_color=THEME["border"], border_width=1, border_color=THEME["muted"])
+        self.dl_btn.grid(row=0, column=1, padx=(5, 0))
 
         # Fullscreen Toggle
-        self.fs_button = ctk.CTkButton(self.sidebar, text="Toggle Fullscreen (F11)", command=self.toggle_fullscreen)
-        self.fs_button.grid(row=10, column=0, padx=20, pady=10)
+        self.fs_button = ctk.CTkButton(self.sidebar, text="Toggle Fullscreen", 
+                                        fg_color=THEME["bg"], hover_color=THEME["border"],
+                                        border_width=1, border_color=THEME["muted"],
+                                        text_color=THEME["fg"],
+                                        command=self.toggle_fullscreen)
+        self.fs_button.grid(row=16, column=0, padx=20, pady=(15, 10), sticky="ew")
         
-        # System Info & Tokens
-        ctk.CTkLabel(self.sidebar, text="--- SYSTEM INFO ---", text_color="gray").grid(row=11, column=0, pady=(20, 5))
+        # System Info Section
+        SectionHeader(self.sidebar, "System Info").grid(row=17, column=0, sticky="ew")
+        
         self.token_label = ctk.CTkLabel(self.sidebar, text="Tokens Remaining: ∞", 
-                                        font=ctk.CTkFont(size=12, weight="bold"), text_color="#44FF44")
-        self.token_label.grid(row=12, column=0, padx=20, sticky="w")
+                                        font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["green"])
+        self.token_label.grid(row=18, column=0, padx=25, pady=(10, 0), sticky="w")
         
         self.api_info = ctk.CTkLabel(self.sidebar, text="API: Local / Google (Free)\nKey: [NOT REQUIRED]", 
-                                       font=ctk.CTkFont(size=10), justify="left", text_color="#888888")
-        self.api_info.grid(row=13, column=0, padx=20, sticky="w")
+                                       font=ctk.CTkFont(size=11), justify="left", text_color=THEME["muted"])
+        self.api_info.grid(row=19, column=0, padx=25, pady=(5, 20), sticky="w")
+
+        for i in range(20):
+            self.sidebar.grid_rowconfigure(i, weight=0)
+        # Let the empty space at bottom expand if any, or spread it?
+        # User said "proportional uniform division of sections"
+        # Let's make the spacers (pady) handle most of it, but ensure they don't squash.
 
     def _create_main_area(self):
-        self.main_frame = ctk.CTkFrame(self.paned, corner_radius=0, fg_color="transparent")
-        # Paned.add handles it
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color=THEME["bg"])
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
         
-        # Input Section
-        self.input_label = ctk.CTkLabel(self.main_frame, text="German Input:", font=ctk.CTkFont(size=14, weight="bold"))
-        self.input_label.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        input_header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        input_header.grid(row=0, column=0, sticky="ew", pady=(10, 5), padx=20)
+        input_header.grid_columnconfigure(0, weight=1)
         
-        self.input_text = ctk.CTkTextbox(self.main_frame, height=150)
-        self.input_text.grid(row=1, column=0, sticky="nsew", pady=10)
+        self.input_label = ctk.CTkLabel(input_header, text="German Input", font=ctk.CTkFont(size=14, weight="bold"), text_color=THEME["accent"])
+        self.input_label.grid(row=0, column=0, sticky="w")
+        
+        # Standard Textbox (Vim removed)
+        self.input_text = ctk.CTkTextbox(self.main_frame, height=150, 
+                                     fg_color=THEME["sidebar_bg"], text_color=THEME["fg"],
+                                     font=("Roboto Mono", 16), undo=True)
+        self.input_text.grid(row=1, column=0, sticky="nsew", pady=10, padx=20)
         self.input_text.focus_set()
+        
         self.input_text.bind('<KeyRelease>', self._on_key_release)
+        self.input_text.bind('<KeyPress>', self._on_key_press)
         self.input_text.bind('<Tab>', self._on_tab_press)
+        
+        # Configure tags for Word-like features via underlying tkinter widget
+        # customtkinter's tag_config is restricted to prevent scaling issues, 
+        # but we need it for Word-like features.
+        inner_text = self.input_text._textbox
+        inner_text.tag_config("bold", font=ctk.CTkFont(family="Roboto Mono", size=16, weight="bold"))
+        inner_text.tag_config("italic", font=ctk.CTkFont(family="Roboto Mono", size=16, slant="italic"))
+        inner_text.tag_config("underline", font=ctk.CTkFont(family="Roboto Mono", size=16, underline=True))
         self.input_text.bind('<Return>', self._on_return_press)
         self.input_text.bind('<Control-a>', self._select_all)
         self.input_text.bind('<Control-A>', self._select_all)
         
         # Action Buttons
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        btn_frame.grid(row=2, column=0, sticky="ew", pady=10, padx=20)
         btn_frame.grid_columnconfigure((0,1), weight=1)
 
         self.generate_button = ctk.CTkButton(btn_frame, text="Speak & IPA (F5)", 
-                                            command=self.generate, height=40)
+                                            command=self.generate, height=40,
+                                            fg_color=THEME["accent"], hover_color="#eba0ac", text_color="#11111b",
+                                            font=ctk.CTkFont(weight="bold"))
         self.generate_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         
         self.record_button = ctk.CTkButton(btn_frame, text="🎤 Start Recording", 
-                                           command=self.toggle_recording, height=40, fg_color="#338833")
+                                           command=self.toggle_recording, height=40, 
+                                           fg_color=THEME["green"], hover_color="#94e2d5", text_color="#11111b",
+                                           font=ctk.CTkFont(weight="bold"))
         self.record_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
         
         # IPA Output
-        self.ipa_card = ctk.CTkFrame(self.main_frame)
-        self.ipa_card.grid(row=3, column=0, sticky="ew", pady=10)
-        self.ipa_display = ctk.CTkLabel(self.ipa_card, text="[ IPA ]", font=ctk.CTkFont(family="Courier", size=24))
+        self.ipa_card = ctk.CTkFrame(self.main_frame, fg_color=THEME["sidebar_bg"], border_width=1, border_color=THEME["border"])
+        self.ipa_card.grid(row=3, column=0, sticky="ew", pady=10, padx=20)
+        self.ipa_display = ctk.CTkLabel(self.ipa_card, text="[ IPA ]", font=ctk.CTkFont(family="Courier", size=24), text_color=THEME["accent"])
         self.ipa_display.pack(padx=10, pady=20, fill="x")
         
         # Assessment Output
-        self.assess_card = ctk.CTkFrame(self.main_frame, fg_color="#2A2A2A")
-        self.assess_card.grid(row=4, column=0, sticky="ew", pady=10)
-        self.assess_label = ctk.CTkLabel(self.assess_card, text="Pronunciation Score: --%", font=ctk.CTkFont(size=16, weight="bold"))
+        self.assess_card = ctk.CTkFrame(self.main_frame, fg_color=THEME["sidebar_bg"], border_width=1, border_color=THEME["border"])
+        self.assess_card.grid(row=4, column=0, sticky="ew", pady=10, padx=20)
+        self.assess_label = ctk.CTkLabel(self.assess_card, text="Pronunciation Score: --%", font=ctk.CTkFont(size=16, weight="bold"), text_color=THEME["fg"])
         self.assess_label.pack(padx=10, pady=10)
-        self.transcription_label = ctk.CTkLabel(self.assess_card, text="You said: ...", text_color="gray")
+        self.transcription_label = ctk.CTkLabel(self.assess_card, text="You said: ...", text_color=THEME["muted"])
         self.transcription_label.pack(padx=10, pady=(0, 10))
         
         # Status
-        self.status_label = ctk.CTkLabel(self.main_frame, text="Ready", text_color="gray")
-        self.status_label.grid(row=5, column=0, sticky="w")
+        self.status_label = ctk.CTkLabel(self.main_frame, text="Ready", text_color=THEME["muted"])
+        self.status_label.grid(row=5, column=0, sticky="w", padx=20, pady=(0, 10))
 
     def _create_history_panel(self):
-        self.history_frame = ctk.CTkFrame(self.paned, width=350)
-        # Paned.add handles it
+        self.history_frame = ctk.CTkFrame(self, width=350, fg_color=THEME["sidebar_bg"], corner_radius=0)
         self.history_frame.grid_rowconfigure(2, weight=1)
+        self.history_frame.grid_columnconfigure(0, weight=1)
         
-        self.history_label = ctk.CTkLabel(self.history_frame, text="History Buffer", font=ctk.CTkFont(size=16, weight="bold"))
-        self.history_label.grid(row=0, column=0, padx=10, pady=10)
+        SectionHeader(self.history_frame, "History Buffer").grid(row=0, column=0, sticky="ew")
         
-        # Search Bar
-        self.search_entry = ctk.CTkEntry(self.history_frame, placeholder_text="Search history...")
-        self.search_entry.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
+        # Search Bar with standard shortcuts enabled by default in CTkEntry, 
+        # but we can explicitly bind them if needed. CTkEntry handles most.
+        self.search_entry = ctk.CTkEntry(self.history_frame, placeholder_text="Search history...",
+                                        fg_color=THEME["bg"], border_color=THEME["border"])
+        self.search_entry.grid(row=1, column=0, padx=15, pady=(10, 10), sticky="ew")
         self.search_entry.bind('<KeyRelease>', lambda e: self._refresh_history())
         
-        self.history_scroll = ctk.CTkScrollableFrame(self.history_frame)
-        self.history_scroll.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        # Ensure scrollable frame matches premium look
+        self.history_scroll = ctk.CTkScrollableFrame(self.history_frame, fg_color="transparent")
+        self.history_scroll.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
+        
+        # We specify a larger initial width for history panel in PanedWindow
+        # to avoid the "too narrow" issue if config is missing.
+        self.after(50, lambda: self._apply_initial_pane_widths())
+
+    def _apply_initial_pane_widths(self):
+        try:
+            sw = self.config.get("sidebar_width") or 250
+            hw = self.config.get("history_panel_width") or 350
+            total_w = self.winfo_width()
+            if sw > 100: self.paned.sash_place(0, sw, 0)
+            if hw > 100: self.paned.sash_place(1, total_w - hw, 0)
+        except: pass
 
     # --- Logic ---
 
@@ -218,21 +525,134 @@ class App(ctk.CTk):
     def _on_dialect_change(self, dialect_name):
         code = DIALECTS.get(dialect_name, "de-DE")
         self.backend.set_dialect(code)
-        self.status_label.configure(text=f"Switched to {dialect_name}", text_color="green")
+        self.config.set("dialect", dialect_name)
+        self.status_label.configure(text=f"Switched to {dialect_name}", text_color=THEME["green"])
+
+    def _on_mode_change(self, mode):
+        if mode == "Auto":
+            self.auto_switch_mode = True
+            self.config.set("auto_switch_mode", True)
+        else:
+            self.auto_switch_mode = False
+            self.config.set("auto_switch_mode", False)
+            self.config.set("connection_mode", mode)
+
+    def _on_online_voice_change(self, voice_name):
+        voice_id = self.online_voice_map.get(voice_name, "de")
+        self.online_voice = voice_id
+        self.config.set("online_voice", voice_id)
+
+    def _on_offline_voice_change(self, voice_name):
+        voice_id = self.offline_voice_map.get(voice_name, "de")
+        self.offline_voice = voice_id
+        self.config.set("offline_voice", voice_id)
+        
+        # Check if it's a Piper voice and if it's missing
+        if voice_id.startswith("piper:"):
+            model_name = voice_id.split(":")[1]
+            model_path = os.path.join(self.backend.models_dir, f"{model_name}.onnx")
+            if not os.path.exists(model_path):
+                self.status_label.configure(text=f"Model missing. Click ⬇️ to download.", text_color=THEME["accent"])
+            else:
+                self.status_label.configure(text=f"Switched to {voice_name}", text_color=THEME["green"])
+
+    def _on_download_voices(self):
+        missing = self.backend.get_missing_models()
+        if not missing:
+            from tkinter import messagebox
+            messagebox.showinfo("Voices", "All high-quality voices (Piper & Kokoro) are already ready!")
+            return
+            
+        def do_dl():
+            self.after(0, lambda: self.dl_btn.configure(state="disabled"))
+            for m in missing:
+                if m.startswith("piper:"):
+                    self.backend.download_piper_model(m.split(":")[1], 
+                                                     lambda msg: self.after(0, lambda m=msg: self.status_label.configure(text=m)))
+                elif m.startswith("kokoro:"):
+                    self.backend.download_kokoro_model(lambda msg: self.after(0, lambda m=msg: self.status_label.configure(text=m)))
+            
+            self.after(0, lambda: self.dl_btn.configure(state="normal"))
+            self.after(0, lambda: self._refresh_offline_voices())
+            from tkinter import messagebox
+            self.after(0, lambda: messagebox.showinfo("Voices", "Voices downloaded successfully! You can now select them."))
+                
+        threading.Thread(target=do_dl, daemon=True).start()
+
+    def _refresh_offline_voices(self):
+        """Update the offline voice option menu with newly downloaded voices."""
+        offline_voices = self.backend.get_offline_voices()
+        offline_voice_names = [v['name'] for v in offline_voices]
+        self.offline_voice_map = {v['name']: v['id'] for v in offline_voices}
+        self.offline_voice_option.configure(values=offline_voice_names)
+
+    def _on_font_family_change(self, family):
+        self.font_family = family
+        self.config.set("font_family", family)
+        self._apply_font()
 
     def _update_font_size(self, val):
         self.font_size = int(val)
-        new_font = ctk.CTkFont(size=self.font_size)
+        self.config.set("font_size", self.font_size)
+        self._apply_font()
+
+    def _apply_font(self):
+        new_font = ctk.CTkFont(family=self.font_family, size=self.font_size)
+        bold_font = ctk.CTkFont(family=self.font_family, size=self.font_size, weight="bold")
+        
         self.input_text.configure(font=new_font)
-        self.generate_button.configure(font=new_font)
-        self.record_button.configure(font=new_font)
+        self.generate_button.configure(font=bold_font)
+        self.record_button.configure(font=bold_font)
+        
+        # Update labels if needed
+        self.input_label.configure(font=ctk.CTkFont(family=self.font_family, size=14, weight="bold"))
         self._refresh_history()
 
     def toggle_fullscreen(self):
+        # Save current geometry before toggling
+        if self.is_fullscreen:
+            # About to exit fullscreen - will restore saved geometry
+            pass
+        else:
+            # About to enter fullscreen - save current geometry
+            self._save_window_geometry()
+        
         self.is_fullscreen = not self.is_fullscreen
         self.attributes("-fullscreen", self.is_fullscreen)
+        self.config.set("is_fullscreen", self.is_fullscreen)
+        
         if not self.is_fullscreen:
-            self.geometry("1100x700")
+            # Restore saved geometry
+            width = self.config.get("window_width")
+            height = self.config.get("window_height")
+            x = self.config.get("window_x")
+            y = self.config.get("window_y")
+            self.geometry(f"{width}x{height}+{x}+{y}")
+    
+    def _save_window_geometry(self):
+        """Save current window geometry to config."""
+        if not self.is_fullscreen:
+            try:
+                # Parse geometry string: WIDTHxHEIGHT+X+Y
+                geometry = self.geometry()
+                size, position = geometry.split('+', 1)
+                width, height = size.split('x')
+                x, y = position.split('+')
+                
+                self.config.set("window_width", int(width))
+                self.config.set("window_height", int(height))
+                self.config.set("window_x", int(x))
+                self.config.set("window_y", int(y))
+            except Exception as e:
+                print(f"DEBUG: Failed to save window geometry: {e}")
+    
+    def _on_closing(self):
+        """Handle window close event - save state and exit."""
+        self._save_window_geometry()
+        self._save_pane_widths()
+        self.destroy()
+    
+
 
     def _select_all(self, event=None):
         self.input_text.tag_add("sel", "1.0", "end")
@@ -241,16 +661,33 @@ class App(ctk.CTk):
     def generate(self):
         text = self.input_text.get("1.0", "end-1c").strip()
         if not text: return
-        is_online = self.mode_switch.get() == "Online"
-        voice_id = self.voices_map.get(self.voice_option.get())
+        
+        # Determine mode (auto-detect or manual)
+        mode_setting = self.mode_switch.get()
+        # Get appropriate voice
+        online_voice_id = self.online_voice_map.get(self.online_voice_option.get(), "de")
+        offline_voice_id = self.offline_voice_map.get(self.offline_voice_option.get(), "de+m3")
         
         self.status_label.configure(text="Generating...", text_color="blue")
+        
         def work():
             try:
+                # Determine mode/connection in thread to avoid freezing
+                is_online = False
+                if mode_setting == "Auto":
+                    try: is_online = self.backend.check_internet()
+                    except: is_online = False
+                    self.after(0, lambda: self.status_label.configure(text=f"Auto: {'Online' if is_online else 'Offline'}", text_color="orange"))
+                else:
+                    is_online = mode_setting == "Online"
+
                 ipa = self.backend.get_ipa(text)
-                filepath = self.backend.generate_audio(text, online=is_online, voice_id=voice_id)
+                filepath = self.backend.generate_audio(text, online=is_online, 
+                                                      voice_id=offline_voice_id if not is_online else None,
+                                                      online_voice=online_voice_id if is_online else None)
                 if filepath:
-                    self.backend.db.add_entry(text, ipa, filepath, self.mode_switch.get(), voice_id)
+                    self.backend.db.add_entry(text, ipa, filepath, mode_setting, 
+                                            online_voice_id if is_online else offline_voice_id)
                     # Learn new words for autocomplete
                     for word in text.split():
                         self.suggester.add_to_history(word)
@@ -299,11 +736,23 @@ class App(ctk.CTk):
     def _show_assessment(self, result):
         if "error" in result:
             self.assess_label.configure(text=f"Error: {result['error']}", text_color="red")
+            self.transcription_label.configure(text="")
         else:
             score = result.get('score', 0)
-            self.assess_label.configure(text=f"Score: {score}%", 
-                                        text_color="#44FF44" if score > 80 else "#FFFF44")
-            self.transcription_label.configure(text=f"You said: {result.get('actual', '')}")
+            self.assess_label.configure(text=f"Phonetic Accuracy: {score}%", 
+                                        text_color=THEME["green"] if score > 85 else THEME["accent"] if score > 60 else "#d18e92")
+            
+            actual = result.get('actual', '')
+            actual_ipa = result.get('actual_ipa', '')
+            target_ipa = result.get('target_ipa', '')
+            
+            # Show a detailed comparison if possible
+            if actual_ipa and target_ipa:
+                text = f"You said: \"{actual}\"\nPhonetics: /{actual_ipa}/  (Target: /{target_ipa}/)"
+            else:
+                text = f"You said: \"{actual}\""
+            
+            self.transcription_label.configure(text=text)
         self.status_label.configure(text="Ready", text_color="gray")
 
     def _refresh_history(self):
@@ -314,7 +763,95 @@ class App(ctk.CTk):
         
         for e in entries:
             HistoryItem(self.history_scroll, e['id'], e['text'], e['ipa'], e['audio_path'],
-                        self.backend.play_file, self._delete_entry, self.font_size).pack(fill="x", pady=2, padx=5)
+                        self.backend.play_file, self._delete_entry, self._handle_history_click, self.font_size).pack(fill="x", pady=2, padx=5)
+
+    def _handle_history_click(self, text):
+        # Clear textbox and insert new text
+        self.input_text.delete("1.0", "end")
+        self.input_text.insert("1.0", text)
+        # Trigger generation
+        self.generate()
+
+    def _on_key_press(self, event):
+        """Handle key press events via C Text Engine."""
+        if not self.text_engine.is_available():
+            return
+            
+        key_code = event.keycode
+        # Convert tkinter state to bits: Alt=1, Shift=2, Ctrl=4
+        ctrl = (event.state & 0x4) != 0
+        shift = (event.state & 0x1) != 0 # Shift is usually 1 in tkinter
+        alt = (event.state & 0x20000) != 0 or (event.state & 0x8) != 0 # Alt can vary, typically 0x20000 or 0x8
+        
+        # 1. Check for German Special Characters (Alt mappings)
+        if alt:
+            # We use keysym if it's a simple character
+            char_key = ord(event.keysym) if len(event.keysym) == 1 else 0
+            german_char = self.text_engine.get_german_char(char_key, True, shift)
+            if german_char:
+                self.input_text.insert("insert", german_char)
+                return "break"
+
+        # 2. Check for Shortcuts (Ctrl mappings)
+        if ctrl:
+            char_key = ord(event.keysym) if len(event.keysym) == 1 else 0
+            action = self.text_engine.get_action(char_key, True, shift)
+            
+            if action != 0:
+                self._handle_text_action(action)
+                return "break"
+
+    def _handle_text_action(self, action):
+        if action == ACTION_BOLD:
+            self._toggle_tag("bold")
+        elif action == ACTION_ITALIC:
+            self._toggle_tag("italic")
+        elif action == ACTION_UNDER:
+            self._toggle_tag("underline")
+        elif action == ACTION_UNDO:
+            try: self.input_text.edit_undo()
+            except: pass
+        elif action == ACTION_REDO:
+            try: self.input_text.edit_redo()
+            except: pass
+        elif action == ACTION_SELECT_ALL:
+            self._select_all()
+        elif action == ACTION_DELETE_WORD:
+            self._delete_word_forward()
+        elif action == ACTION_DELETE_WORD_BACK:
+            self._delete_word_backward()
+
+    def _delete_word_forward(self):
+        """Delete from cursor to end of current word (Ctrl+Delete)."""
+        idx = self.input_text.index("insert")
+        # Find end of word
+        end_idx = self.input_text.index(f"{idx} wordend")
+        if idx == end_idx: # If already at end of word, maybe next word?
+            end_idx = self.input_text.index(f"{idx} +1c wordend")
+        self.input_text.delete(idx, end_idx)
+
+    def _delete_word_backward(self):
+        """Delete from cursor to start of current word (Ctrl+Backspace)."""
+        idx = self.input_text.index("insert")
+        start_idx = self.input_text.index(f"{idx} wordstart")
+        if idx == start_idx:
+            start_idx = self.input_text.index(f"{idx} -1c wordstart")
+        self.input_text.delete(start_idx, idx)
+
+    def _toggle_tag(self, tag_name):
+        try:
+            inner_text = self.input_text._textbox
+            sel_range = inner_text.tag_ranges("sel")
+            if not sel_range:
+                return
+            
+            # If selection has the tag already, remove it; else add it
+            if tag_name in inner_text.tag_names("sel.first"):
+                inner_text.tag_remove(tag_name, "sel.first", "sel.last")
+            else:
+                inner_text.tag_add(tag_name, "sel.first", "sel.last")
+        except:
+            pass
 
     def _delete_entry(self, entry_id, widget):
         self.backend.db.delete_entry(entry_id)
@@ -322,10 +859,42 @@ class App(ctk.CTk):
 
     # --- Autocomplete Hooks ---
     def _on_key_release(self, event):
-        if event.keysym in ("Tab", "Return", "Escape"): return
-        text = self.input_text.get("1.0", "insert").split()
-        if not text: self._close_suggestions(); return
-        self.suggestions = self.suggester.get_suggestions(text[-1])
+        """Trigger autocomplete on key release instantly."""
+        if event.keysym in ("Tab", "Return", "Escape", "Up", "Down", "Left", "Right"): return
+        
+        # Trigger instantly via C engine lookup (no timer)
+        self._trigger_autocomplete()
+
+    def _trigger_autocomplete(self):
+        try:
+            # Get text up to cursor
+            text = self.input_text.get("1.0", "insert").split()
+        except: return
+        
+        if not text:
+            self._close_suggestions()
+            return
+            
+        if not text:
+            self._close_suggestions()
+            return
+            
+        query = text[-1]
+        
+        # We no longer need a large debounce because C lookups take < 0.2ms.
+        # Direct call for instantaneous updates while touch-typing.
+        self._trigger_lookup_sync(query)
+
+    def _trigger_lookup_sync(self, query):
+        """Synchronous fast lookup for sub-millisecond C engine."""
+        try:
+            results = self.suggester.get_suggestions(query)
+            self._update_suggestions_ui(results)
+        except Exception as e:
+            print(f"DEBUG: Autocomplete error: {e}")
+
+    def _update_suggestions_ui(self, results):
+        self.suggestions = results
         if self.suggestions: self._show_suggestions()
         else: self._close_suggestions()
 
