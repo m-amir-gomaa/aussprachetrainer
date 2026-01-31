@@ -1,12 +1,6 @@
 {
   description = "Aussprachetrainer";
 
-  nixConfig = {
-    extra-substituters = [ "https://m-amir-gomaa.cachix.org" ];
-    extra-trusted-public-keys = [
-      "m-amir-gomaa.cachix.org-1:qbhA4LjeP5gCWsvhqeWOuBWsggC51IJB2gNfdQ6pxrM="
-    ];
-  };
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
