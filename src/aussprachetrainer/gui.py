@@ -21,18 +21,19 @@ DIALECTS = {
 }
 
 # Premium "Mocha-inspired" Theme
+# No Clown Fiesta Theme (Dark)
 THEME = {
-    "bg": "#1e1e2e",           # Dark Mocha background
-    "sidebar_bg": "#11111b",   # Deeper Crust background
-    "fg": "#cdd6f4",           # Soft white foreground
-    "accent": "#fab387",       # Peach accent
-    "header_fg": "#f5e0dc",    # Rosewater for secondary headers
-    "muted": "#585b70",        # Surface2 for muted text
-    "green": "#a6e3a1",        # Green for success
-    "blue": "#89b4fa",         # Blue for info
-    "red": "#f38ba8",          # Red for delete/danger
-    "border": "#313244",       # Surface0 for subtle borders
-    "card_bg": "#181825"        # Mantle for cards
+    "bg": "#151515",           # Palette: bg
+    "sidebar_bg": "#171717",   # Palette: alt_bg
+    "fg": "#E1E1E1",           # Palette: fg
+    "accent": "#7E97AB",       # Palette: gray_blue (Subdued accent)
+    "header_fg": "#A2B5C1",    # Palette: medium_gray_blue
+    "muted": "#727272",        # Palette: medium_gray
+    "green": "#90A959",        # Palette: green
+    "blue": "#BAD7FF",         # Palette: blue
+    "red": "#b46958",          # Palette: red
+    "border": "#202020",       # Palette: accent (Dark gray for borders)
+    "card_bg": "#171717"       # Palette: alt_bg
 }
 
 # Set appearance and color theme

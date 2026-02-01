@@ -40,7 +40,8 @@ class VimEditor(ctk.CTkFrame):
         self.zep = zep_vim.ZepVim()
         
         # Use a canvas for rendering
-        self.canvas = tk.Canvas(self, bg="#1e1e2e", highlightthickness=0)
+        # Use a canvas for rendering
+        self.canvas = tk.Canvas(self, bg="#151515", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         
         self.canvas.bind("<KeyPress>", self._on_key_press)
@@ -137,14 +138,15 @@ class VimEditor(ctk.CTkFrame):
         line_h = f.metrics("linespace")
 
         # Render text
-        self.canvas.create_text(10, 10, anchor="nw", text=text, fill="#cdd6f4", font=self.font)
+        # Render text
+        self.canvas.create_text(10, 10, anchor="nw", text=text, fill="#E1E1E1", font=self.font)
         
         # Render Status Line
         h = self.winfo_height()
         if h < 20: h = 200
         
-        status_color = "#fab387" if mode == "INSERT" else "#89b4fa"
-        self.canvas.create_rectangle(0, h-25, self.winfo_width(), h, fill="#313244", outline="")
+        status_color = "#7E97AB" if mode == "INSERT" else "#BAD7FF"
+        self.canvas.create_rectangle(0, h-25, self.winfo_width(), h, fill="#171717", outline="")
         self.canvas.create_text(10, h-22, anchor="nw", text=f"-- {mode} --", fill=status_color, font=("Roboto Mono", 10, "bold"))
 
         # Render Cursor
@@ -180,17 +182,17 @@ class VimEditor(ctk.CTkFrame):
                 x_end = 10 + f.measure(r_text[:c_end + 1])
                 y = 10 + r * line_h
                 # Opaque background
-                self.canvas.create_rectangle(x_start, y, x_end, y + line_h, fill="#585b70", outline="")
+                self.canvas.create_rectangle(x_start, y, x_end, y + line_h, fill="#373737", outline="")
                 # Re-render selected text on top in white for visibility
                 selected_text = r_text[c_start:c_end + 1] if c_end < len(r_text) else r_text[c_start:]
                 if selected_text:
                     self.canvas.create_text(x_start, y, anchor="nw", text=selected_text, 
-                                          fill="#ffffff", font=self.font)
+                                          fill="#E1E1E1", font=self.font)
 
         if mode == "INSERT":
             if self.cursor_visible:
                 # Slimmer bar (1 pixel)
-                self.canvas.create_rectangle(cur_x, cur_y, cur_x+1, cur_y+line_h, fill="#f5e0dc", outline="")
+                self.canvas.create_rectangle(cur_x, cur_y, cur_x+1, cur_y+line_h, fill="#E1E1E1", outline="")
         else: # NORMAL / VISUAL
             # Fully opaque block cursor WITH character underneath
             char_under_cursor = " "
@@ -212,11 +214,11 @@ class VimEditor(ctk.CTkFrame):
                 if block_w == 0: block_w = f.measure("m") # Fallback for zero-width chars
             
             # Draw cursor block
-            self.canvas.create_rectangle(cur_x, cur_y, cur_x+block_w, cur_y+line_h, fill="#cdd6f4", outline="")
+            self.canvas.create_rectangle(cur_x, cur_y, cur_x+block_w, cur_y+line_h, fill="#D0D0D0", outline="")
             
             # Draw character on top of cursor in background color (reverse video effect)
             if char_under_cursor.strip(): # Only draw if it's visible char
-                self.canvas.create_text(cur_x, cur_y, anchor="nw", text=char_under_cursor, fill="#1e1e2e", font=self.font)
+                self.canvas.create_text(cur_x, cur_y, anchor="nw", text=char_under_cursor, fill="#151515", font=self.font)
 
     def get_text(self):
         return self.zep.get_text()
