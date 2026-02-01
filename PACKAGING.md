@@ -130,6 +130,13 @@ Use the **AppImage** method (Section 2) for generic Linux distribution as it lev
 
 ## 🔄 Updating Packages
 
+### System Flake (NixOS / Home Manager)
+To pull the latest updates for a permanent system installation:
+```bash
+nix flake update aussprachetrainer
+sudo nixos-rebuild switch --flake .
+```
+
 ### AppImage
 To update your AppImage, simply pull the latest source code and re-run the bundle command:
 ```bash

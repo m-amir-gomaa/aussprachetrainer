@@ -91,6 +91,41 @@ nix run
 nix develop
 ```
 
+#### Permanent Installation (NixOS / Home Manager)
+
+To add Aussprachetrainer to your system permanently using Flakes:
+
+1. **Verify the build** (optional but recommended):
+   ```bash
+   git clone https://github.com/m-amir-gomaa/aussprachetrainer
+   cd aussprachetrainer
+   nix build
+   # Verify it runs
+   ./result/bin/aussprachetrainer
+   ```
+
+2. **Add to your system `flake.nix`**:
+   Add the repository to your `inputs`:
+   ```nix
+   inputs = {
+     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+     aussprachetrainer.url = "github:m-amir-gomaa/aussprachetrainer";
+   };
+   ```
+
+3. **Install to `systemPackages`**:
+   In your `outputs` or configuration file:
+   ```nix
+   environment.systemPackages = [
+     inputs.aussprachetrainer.packages.${pkgs.system}.default
+   ];
+   ```
+
+4. **Apply changes**:
+   ```bash
+   sudo nixos-rebuild switch --flake .
+   ```
+
 ### Manual Installation
 
 #### 1. System Dependencies
@@ -161,12 +196,20 @@ If you run the application directly via `nix run`:
 nix run --refresh github:m-amir-gomaa/aussprachetrainer
 ```
 
-If you have a local clone or are in a `nix develop` shell:
+If you installed it permanently in your system flake:
+
+```bash
+# Update the lockfile to point to the latest GitHub commit
+nix flake update aussprachetrainer
+sudo nixos-rebuild switch --flake .
+```
+
+If you have a local clone for development:
 
 ```bash
 git pull
-nix flake update # Update dependencies if lockfile changed
-nix run          # Rebuild and run
+nix build    # Rebuild in ./result
+nix run      # Run the local version
 ```
 
 ### Manual Installation
