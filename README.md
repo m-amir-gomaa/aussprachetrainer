@@ -1,67 +1,317 @@
 # Aussprachetrainer 🇩🇪
 
-A premium German pronunciation trainer specialized for dialects (**Germany**, **Austria**, **Switzerland**).
+A premium German pronunciation trainer with native Vim keybindings, specialized for regional dialects (**Germany**, **Austria**, **Switzerland**).
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11-blue.svg)
+![Nix](https://img.shields.io/badge/built%20with-Nix-5277C3.svg)
+
+---
+
+## 📖 Overview
+
+**Aussprachetrainer** is a modern desktop application designed to help learners master German pronunciation across different regional dialects. It combines powerful Text-to-Speech (TTS) and Automatic Speech Recognition (ASR) capabilities with a Vim-inspired text editor for a fully keyboard-driven workflow.
+
+### Key Highlights
+
+- **Mouseless Experience**: Complete keyboard control with Vim motions and global shortcuts
+- **Dialect Support**: Specialized for German dialects (de-DE, de-AT, de-CH)
+- **Offline-First**: Works completely offline with `espeak-ng`, `piper-tts`, and `pocketsphinx`
+- **Smart Autocomplete**: Context-aware word suggestions powered by frequency analysis
+- **IPA Transcription**: Real-time phonetic transcription using `espeak-ng`
+- **Premium UI**: Dark mode with Catppuccin-inspired theme and resizable panels
+
+---
 
 ## ✨ Features
 
-- **Specialized German Focus**: Support for regional dialects (de-DE, de-AT, de-CH).
-- **Online & Offline Modes**: Integrated with Google TTS/ASR and `espeak-ng`/`pocketsphinx`.
-- **Premium GUI**: Resizable panels, Dark Mode, and Fullscreen support (F11).
-- **IPA Display**: Real-time phonetic transcription.
-- **Autocomplete**: Popularity-based word suggestions that learn from your history.
-- **Privacy First**: Local history buffer and optional offline processing.
+### 🎯 Core Functionality
 
-## 🚀 Getting Started
+- **Text-to-Speech (TTS)**
+  - Online: Google TTS with dialect support
+  - Offline: Piper neural TTS, Kokoro ONNX, and espeak-ng fallback
+  - Voice selection for different German accents
+
+- **Speech Recognition (ASR)**
+  - Online: Google Speech Recognition
+  - Offline: Pocketsphinx with German language models
+  - Pronunciation scoring with phonetic comparison
+
+- **IPA Display**
+  - Real-time phonetic transcription
+  - Side-by-side comparison of target vs. actual pronunciation
+
+### ⌨️ Vim Integration
+
+- **Full Vim Motions**: `hjkl`, `w/b/e`, `gg/G`, `0/$`
+- **Operators**: `d` (delete), `c` (change), `y` (yank)
+- **Visual Modes**: Character-wise (`v`) and line-wise (`V`) selection
+- **Multipliers**: `3w`, `2dd`, `5j`, etc.
+- **Insert Mode**: `i`, `a`, `o`, `O`, `I`, `A`
+- **Replace Mode**: `R` (bulk), `r` (single character)
+- **Undo/Redo**: `u` / `Ctrl+r`
+
+### 🚀 Mouseless Navigation
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Return` | Generate speech and IPA |
+| `Ctrl+r` | Toggle recording (start/stop) |
+| `Ctrl+p` | Play last audio |
+| `Ctrl+h` | Toggle history panel |
+| `Ctrl+n` / `Ctrl+p` | Navigate autocomplete (Insert mode) |
+| `F11` | Toggle fullscreen |
+| `Esc` | Exit fullscreen / Normal mode |
+
+### 📊 Smart Features
+
+- **Autocomplete**: Frequency-based German word suggestions that learn from your usage
+- **History Management**: Searchable history with `j`/`k` navigation and "Clear All" functionality
+- **Persistence**: Saves window geometry, mode preferences, audio files, and usage history
+- **Automatic Mode Switching**: Detects internet connectivity and switches TTS/ASR modes
+
+---
+
+## 🚀 Installation
 
 ### Using Nix (Recommended)
 
 If you have [Nix](https://nixos.org/download.html) installed with flakes enabled:
 
 ```bash
-# Run directly
+# Run directly from GitHub
 nix run github:m-amir-gomaa/aussprachetrainer
 
+# Or clone and run locally
+git clone https://github.com/m-amir-gomaa/aussprachetrainer
+cd aussprachetrainer
+nix run
+
 # Development shell
-nix develop github:m-amir-gomaa/aussprachetrainer
+nix develop
 ```
 
-### Manual Installation (Python)
+### Manual Installation
 
-1. **System Dependencies**:
-   - `espeak-ng`
-   - `portaudio`
-   - `pulseaudio` (or `alsa-utils`)
-   - `mpg123`
+#### 1. System Dependencies
 
-2. **Clone and Install**:
+**Debian/Ubuntu:**
+```bash
+sudo apt install espeak-ng portaudio19-dev pulseaudio mpg123 gcc g++ cmake pkg-config python3-dev
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S espeak-ng portaudio pulseaudio mpg123 gcc cmake pkgconf python
+```
+
+**macOS:**
+```bash
+brew install espeak-ng portaudio mpg123 cmake pkg-config
+```
+
+#### 2. Python Dependencies
 
 ```bash
 git clone https://github.com/m-amir-gomaa/aussprachetrainer
 cd aussprachetrainer
-pip install .
+
+# Install Python dependencies
+pip install -e .
+
+# Build C++ extensions
+python -c "import pybind11; print(pybind11.get_include())"
+# Use the output path in the following commands
+
+# Build Zep Vim wrapper
+g++ -O3 -Wall -shared -std=c++11 -fPIC \
+    -I$(python3 -c "import pybind11; print(pybind11.get_include())") \
+    -I$(python3 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
+    src/aussprachetrainer/lib/zep_wrapper.cpp \
+    -o src/aussprachetrainer/zep_vim.so
+
+# Build text engine
+gcc -shared -o src/aussprachetrainer/lib/text_engine.so \
+    src/aussprachetrainer/lib/text_engine.c -fPIC
 ```
 
-3. **Run**:
+#### 3. Run
 
 ```bash
-aussprachetrainer
+python -m aussprachetrainer
 ```
 
-## ⌨️ Shortcuts
+---
 
-- **F5 / Ctrl+Enter**: Speak & Generate IPA
-- **F11**: Toggle Fullscreen
-- **Ctrl+A**: Select All in input box
-- **Tab**: Cycle autocomplete suggestions
-- **Esc**: Exit Fullscreen / Close suggestions
+## 📚 Usage
 
-## 🛠 Tech Stack
+### Basic Workflow
 
-- **GUI**: CustomTkinter
-- **TTS**: pyttsx3, gTTS
-- **ASR**: SpeechRecognition (Google/Pocketsphinx)
-- **Environment**: Nix (Flakes)
+1. **Launch the application**
+   ```bash
+   nix run github:m-amir-gomaa/aussprachetrainer
+   ```
+
+2. **Type German text** using the Vim editor
+   - Press `i` to enter Insert mode
+   - Type your German sentence
+   - Press `Esc` or `jj` to return to Normal mode
+
+3. **Generate speech**
+   - Press `Ctrl+Return` or click "Speak & IPA"
+   - Listen to the pronunciation
+   - View the IPA transcription
+
+4. **Record your pronunciation**
+   - Press `Ctrl+r` or click "Start Recording"
+   - Speak the sentence
+   - Press `Ctrl+r` again to stop
+   - View your pronunciation score
+
+### Vim Cheat Sheet
+
+```
+NORMAL MODE:
+  h j k l       - Move cursor left/down/up/right
+  w b e         - Word navigation (forward/backward/end)
+  0 $           - Line start/end
+  gg G          - File start/end
+  dd            - Delete line
+  dw            - Delete word
+  3dd           - Delete 3 lines
+  yy            - Yank (copy) line
+  p P           - Paste after/before cursor
+  u             - Undo
+  Ctrl+r        - Redo (in Normal mode)
+  
+INSERT MODE:
+  i a           - Insert before/after cursor
+  I A           - Insert at line start/end
+  o O           - Open new line below/above
+  Esc or jj     - Return to Normal mode
+  Ctrl+n/Ctrl+p - Navigate autocomplete
+  
+VISUAL MODE:
+  v             - Character-wise selection
+  V             - Line-wise selection
+  d y c         - Delete/yank/change selection
+```
+
+### History Navigation
+
+1. Press `Ctrl+h` to open the history panel
+2. Use `j`/`k` to navigate through entries
+3. Press `Enter` to load an entry into the editor
+4. Press `Ctrl+h` again to return to the editor
+
+---
+
+## 🏗️ Architecture & Design
+
+### Technology Stack
+
+- **GUI Framework**: CustomTkinter (modern, themed Tkinter)
+- **Vim Engine**: Custom C++ implementation with pybind11 bindings
+- **TTS Engines**: 
+  - Online: gTTS (Google Text-to-Speech)
+  - Offline: Piper neural TTS, Kokoro ONNX, espeak-ng
+- **ASR Engines**:
+  - Online: Google Speech Recognition
+  - Offline: Pocketsphinx
+- **Autocomplete**: C-based Trie with frequency ranking
+- **Build System**: Nix Flakes for reproducible builds
+- **Testing**: unittest with 13 Vim engine tests + 4 UI tests
+
+### Project Structure
+
+```
+aussprachetrainer/
+├── src/aussprachetrainer/
+│   ├── gui.py                 # Main application GUI
+│   ├── backend.py             # TTS/ASR/IPA logic
+│   ├── vim_editor.py          # Vim editor component
+│   ├── autocomplete.py        # German word suggester
+│   ├── database.py            # History persistence
+│   ├── config.py              # Configuration manager
+│   └── lib/
+│       ├── zep_wrapper.cpp    # Vim engine (C++)
+│       └── text_engine.c      # Text utilities (C)
+├── tests/
+│   ├── test_vim.py            # Vim engine tests
+│   └── test_ui.py             # UI integration tests
+├── flake.nix                  # Nix build configuration
+└── README.md
+```
+
+### Design Philosophy
+
+1. **Keyboard-First**: Every feature is accessible via keyboard shortcuts
+2. **Offline-Capable**: Core functionality works without internet
+3. **Privacy-Focused**: All data stored locally, no telemetry
+4. **Vim-Native**: Not just Vim keybindings, but a real Vim engine
+5. **Extensible**: Modular architecture for easy feature additions
+
+---
+
+## 🧪 Testing
+
+Run the test suite:
+
+```bash
+# Comprehensive Test Suite (DB, Vim, Audio, Autocomplete)
+nix develop --command python3 tests/test_comprehensive.py
+
+# Vim engine tests (Legacy)
+nix develop --command bash -c "export PYTHONPATH=\$PYTHONPATH:\$(pwd)/src && python3 tests/test_vim.py -v"
+
+# UI integration tests (Legacy)
+nix develop --command bash -c "export PYTHONPATH=\$PYTHONPATH:\$(pwd)/src && python3 tests/test_ui.py -v"
+
+# Run all tests using unittest discovery
+nix develop --command bash -c "export PYTHONPATH=\$PYTHONPATH:\$(pwd)/src && python3 -m unittest discover tests"
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/m-amir-gomaa/aussprachetrainer
+cd aussprachetrainer
+
+# Enter development environment
+nix develop
+
+# Make changes and test
+python -m aussprachetrainer
+```
+
+---
 
 ## 📄 License
 
 MIT License - Copyright (c) 2026 m-amir-gomaa
+
+See [LICENSE](LICENSE) for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **Zep** - Inspiration for the Vim engine architecture
+- **CustomTkinter** - Modern themed Tkinter framework
+- **Piper TTS** - High-quality neural TTS voices
+- **espeak-ng** - Phonetic transcription and fallback TTS
+- **Catppuccin** - Color scheme inspiration
+
+---
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/m-amir-gomaa/aussprachetrainer/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/m-amir-gomaa/aussprachetrainer/discussions)

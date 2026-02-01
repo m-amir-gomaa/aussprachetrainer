@@ -481,18 +481,7 @@ class App(ctk.CTk):
         self.history_frame.grid_rowconfigure(2, weight=1)
         self.history_frame.grid_columnconfigure(0, weight=1)
         
-        # Header with Clear Button
-        header_frame = ctk.CTkFrame(self.history_frame, fg_color="transparent")
-        header_frame.grid(row=0, column=0, sticky="ew")
-        header_frame.grid_columnconfigure(0, weight=1)
-        
-        SectionHeader(header_frame, "History Buffer").grid(row=0, column=0, sticky="ew")
-        
-        self.clear_btn = ctk.CTkButton(header_frame, text="Clear All", width=60, height=24,
-                                      fg_color=THEME["red"], hover_color="#eba0ac", text_color="#181825",
-                                      font=ctk.CTkFont(size=11, weight="bold"),
-                                      command=self._confirm_clear_history)
-        self.clear_btn.grid(row=0, column=1, padx=10, sticky="e")
+        SectionHeader(self.history_frame, "History Buffer").grid(row=0, column=0, sticky="ew")
         
         # Search Bar with standard shortcuts enabled by default in CTkEntry, 
         # but we can explicitly bind them if needed. CTkEntry handles most.
@@ -775,29 +764,6 @@ class App(ctk.CTk):
         for e in entries:
             HistoryItem(self.history_scroll, e['id'], e['text'], e['ipa'], e['audio_path'],
                         self.backend.play_file, self._delete_entry, self._handle_history_click, self.font_size).pack(fill="x", pady=2, padx=5)
-
-    def _confirm_clear_history(self):
-        # Simple confirmation using a mock dialog or status update since CTk doesn't have a built-in confirm
-        # Ideally we'd use a Toplevel, but for now let's use a "Click again to confirm" pattern or just do it
-        # Let's implementation a robust TopLevel confirmation
-        
-        from tkinter import messagebox
-        if messagebox.askyesno("Confirm Clear", "Are you sure you want to delete ALL history and audio files?"):
-             try:
-                 self.backend.db.clear_history()
-                 self._refresh_history()
-                 self.status_label.configure(text="History cleared", text_color=THEME["green"])
-             except Exception as e:
-                 self.status_label.configure(text=f"Error clearing history: {e}", text_color="red")
-
-    def _delete_entry(self, entry_id, widget_ref):
-        try:
-             self.backend.db.delete_entry(entry_id)
-             # Remove widget
-             widget_ref.destroy()
-             # Also update internal list if we were tracking it
-        except Exception as e:
-             print(f"DEBUG: Failed to delete entry: {e}")
 
     def _handle_history_click(self, text):
         # Insert new text into Vim buffer

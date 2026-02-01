@@ -25,7 +25,12 @@ class PronunciationBackend:
         self.engine = pyttsx3.init()
         # History Manager
         self.db = HistoryManager()
-        # Session audio dir
+        
+        # Persistent audio directory
+        self.audio_dir = os.path.expanduser("~/.local/share/aussprachetrainer/audio")
+        os.makedirs(self.audio_dir, exist_ok=True)
+        
+        # Session audio dir (temporary)
         self.session_dir = tempfile.mkdtemp(prefix="aussprachetrainer_")
         
         # Piper models directory
@@ -39,6 +44,7 @@ class PronunciationBackend:
         self.recording = False
         self.recorded_frames = []
         self.fs = 44100 # Change to 44.1kHz for better compatibility
+        self.last_audio_path = None
 
     def set_dialect(self, code: str):
         self.dialect = code
@@ -132,7 +138,28 @@ class PronunciationBackend:
             print(f"DEBUG: Audio generation failed: {e}")
             return None
         
+        self.last_audio_path = filepath
         return filepath
+
+    def copy_to_persistent(self, session_audio_path: str) -> str:
+        """Copy audio file from session directory to persistent storage.
+        Returns the persistent path, or None if copy fails."""
+        if not session_audio_path or not os.path.exists(session_audio_path):
+            return None
+        
+        try:
+            filename = os.path.basename(session_audio_path)
+            persistent_path = os.path.join(self.audio_dir, filename)
+            
+            # Copy file to persistent storage
+            import shutil
+            shutil.copy2(session_audio_path, persistent_path)
+            
+            print(f"DEBUG: Copied audio to persistent storage: {persistent_path}")
+            return persistent_path
+        except Exception as e:
+            print(f"DEBUG: Failed to copy audio to persistent storage: {e}")
+            return None
 
     def is_piper_available(self) -> bool:
         """Check if any Piper models are present."""
