@@ -53,15 +53,15 @@ A premium German pronunciation trainer with native Vim keybindings, specialized 
 
 ### 🚀 Mouseless Navigation
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Return` | Generate speech and IPA |
-| `Ctrl+r` | Toggle recording (start/stop) |
-| `Ctrl+p` | Play last audio |
-| `Ctrl+h` | Toggle history panel |
+| Shortcut            | Action                              |
+| ------------------- | ----------------------------------- |
+| `Ctrl+Return`       | Generate speech and IPA             |
+| `Ctrl+r`            | Toggle recording (start/stop)       |
+| `Ctrl+p`            | Play last audio                     |
+| `Ctrl+h`            | Toggle history panel                |
 | `Ctrl+n` / `Ctrl+p` | Navigate autocomplete (Insert mode) |
-| `F11` | Toggle fullscreen |
-| `Esc` | Exit fullscreen / Normal mode |
+| `F11`               | Toggle fullscreen                   |
+| `Esc`               | Exit fullscreen / Normal mode       |
 
 ### 📊 Smart Features
 
@@ -79,7 +79,7 @@ A premium German pronunciation trainer with native Vim keybindings, specialized 
 If you have [Nix](https://nixos.org/download.html) installed with flakes enabled:
 
 ```bash
-# Run directly from GitHub
+# Run directly from cachix, you won't need to build the application on your machine
 nix run github:m-amir-gomaa/aussprachetrainer
 
 # Or clone and run locally
@@ -96,16 +96,19 @@ nix develop
 #### 1. System Dependencies
 
 **Debian/Ubuntu:**
+
 ```bash
 sudo apt install espeak-ng portaudio19-dev pulseaudio mpg123 gcc g++ cmake pkg-config python3-dev
 ```
 
 **Arch Linux:**
+
 ```bash
 sudo pacman -S espeak-ng portaudio pulseaudio mpg123 gcc cmake pkgconf python
 ```
 
 **macOS:**
+
 ```bash
 brew install espeak-ng portaudio mpg123 cmake pkg-config
 ```
@@ -148,6 +151,7 @@ python -m aussprachetrainer
 ### Basic Workflow
 
 1. **Launch the application**
+
    ```bash
    nix run github:m-amir-gomaa/aussprachetrainer
    ```
@@ -183,14 +187,14 @@ NORMAL MODE:
   p P           - Paste after/before cursor
   u             - Undo
   Ctrl+r        - Redo (in Normal mode)
-  
+
 INSERT MODE:
   i a           - Insert before/after cursor
   I A           - Insert at line start/end
   o O           - Open new line below/above
   Esc or jj     - Return to Normal mode
   Ctrl+n/Ctrl+p - Navigate autocomplete
-  
+
 VISUAL MODE:
   v             - Character-wise selection
   V             - Line-wise selection
@@ -212,7 +216,7 @@ VISUAL MODE:
 
 - **GUI Framework**: CustomTkinter (modern, themed Tkinter)
 - **Vim Engine**: Custom C++ implementation with pybind11 bindings
-- **TTS Engines**: 
+- **TTS Engines**:
   - Online: gTTS (Google Text-to-Speech)
   - Offline: Piper neural TTS, Kokoro ONNX, espeak-ng
 - **ASR Engines**:
@@ -314,4 +318,3 @@ See [LICENSE](LICENSE) for details.
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/m-amir-gomaa/aussprachetrainer/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/m-amir-gomaa/aussprachetrainer/discussions)
