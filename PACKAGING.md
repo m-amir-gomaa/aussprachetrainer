@@ -125,3 +125,25 @@ For a pure "build from source" Flatpak without Nix, you typically need to list e
 
 ### Recommended Approach
 Use the **AppImage** method (Section 2) for generic Linux distribution as it leverages the already-working Nix configuration to handle the complex dependency graph automatically.
+
+---
+
+## 🔄 Updating Packages
+
+### AppImage
+To update your AppImage, simply pull the latest source code and re-run the bundle command:
+```bash
+git pull
+nix run github:nix-community/nix-appimage -- bundle .
+```
+Then replace your old AppImage with the newly generated one.
+
+### Flatpak
+If installed from a repository (e.g., Flathub), use:
+```bash
+flatpak update org.github.m_amir_gomaa.aussprachetrainer
+```
+If you are developing locally, rebuild and re-install:
+```bash
+flatpak-builder --force-clean --install build-dir org.github.m_amir_gomaa.aussprachetrainer.yml
+```

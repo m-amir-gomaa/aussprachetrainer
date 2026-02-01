@@ -150,6 +150,45 @@ For instructions on building a Nix package, Flatpak, or AppImage, see [PACKAGING
 
 ---
 
+## 🔄 Updating
+
+### Using Nix
+
+If you run the application directly via `nix run`:
+
+```bash
+# Force Nix to check for the latest version from GitHub
+nix run --refresh github:m-amir-gomaa/aussprachetrainer
+```
+
+If you have a local clone or are in a `nix develop` shell:
+
+```bash
+git pull
+nix flake update # Update dependencies if lockfile changed
+nix run          # Rebuild and run
+```
+
+### Manual Installation
+
+To pull the latest changes and rebuild the C extensions:
+
+```bash
+git pull
+
+# Rebuild the Vim engine and text engine
+nix develop --command bash -c 'g++ -O3 -Wall -shared -std=c++11 -fPIC \
+    -I$(python3 -c "import pybind11; print(pybind11.get_include())") \
+    -I$(python3 -c "import sysconfig; print(sysconfig.get_paths()[\"include\"])") \
+    src/aussprachetrainer/lib/zep_wrapper.cpp \
+    -o src/aussprachetrainer/zep_vim.so'
+
+gcc -shared -o src/aussprachetrainer/lib/text_engine.so \
+    src/aussprachetrainer/lib/text_engine.c -fPIC
+```
+
+---
+
 ## 📚 Usage
 
 ### Basic Workflow
