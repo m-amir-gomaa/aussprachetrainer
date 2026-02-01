@@ -144,6 +144,10 @@ gcc -shared -o src/aussprachetrainer/lib/text_engine.so \
 python -m aussprachetrainer
 ```
 
+### Packaging for Distribution
+
+For instructions on building a Nix package, Flatpak, or AppImage, see [PACKAGING.md](PACKAGING.md).
+
 ---
 
 ## 📚 Usage
@@ -199,6 +203,16 @@ VISUAL MODE:
   v             - Character-wise selection
   V             - Line-wise selection
   d y c         - Delete/yank/change selection
+
+GERMAN INPUT (INSERT MODE):
+  Alt+a         - ä
+  Alt+o         - ö
+  Alt+u         - ü
+  Alt+s (twice) - ß (Alt+s inserts 's', second Alt+s replaces it with 'ß')
+  Alt+Shift+a   - Ä
+  Alt+Shift+o   - Ö
+  Alt+Shift+u   - Ü
+  Alt+Shift+s (twice) - ẞ
 ```
 
 ### History Navigation

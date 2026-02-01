@@ -71,6 +71,40 @@ class VimEditor(ctk.CTkFrame):
                 self.on_submit()
             return "break"
             
+        # Handle Alt+Key for German Umlauts in Insert Mode
+        # Robust Alt detection: Mod1 (0x8), Mod5 (0x80), or Extended Alt (0x20000)
+        is_alt = bool(event.state & (0x8 | 0x80 | 0x20000))
+        if self.zep.get_mode() == "INSERT" and is_alt:
+            # Special logic for Eszett: Alt+s+s -> ß
+            if key in ("s", "S"):
+                text = self.zep.get_text()
+                row, col = self.zep.get_cursor() # col is byte offset
+                lines = text.split("\n")
+                if row < len(lines):
+                    line_bytes = lines[row].encode("utf-8")
+                    # Check if the byte immediately before cursor is 's' or 'S'
+                    if col > 0 and line_bytes[col-1:col] == key.encode("utf-8"):
+                        # Replace previous s with ß
+                        self.zep.handle_key("BackSpace", 0)
+                        self.zep.handle_key("ß" if key == "s" else "ẞ", 0)
+                        self._render_vimbuffer()
+                        return "break"
+                # Otherwise just insert s/S
+                self.zep.handle_key(key, 0)
+                self._render_vimbuffer()
+                return "break"
+
+            umlaut_map = {
+                "a": "ä", "A": "Ä",
+                "o": "ö", "O": "Ö",
+                "u": "ü", "U": "Ü"
+            }
+            if key in umlaut_map:
+                # Pass the character with 0 modifiers to treat it as a normal keypress
+                self.zep.handle_key(umlaut_map[key], 0)
+                self._render_vimbuffer()
+                return "break"
+
         # Map some common keys
         key_map = {
             "comma": ",",
@@ -156,7 +190,15 @@ class VimEditor(ctk.CTkFrame):
         # Calculate precise X by measuring prefix of current line
         prefix = ""
         if cur_row < len(lines):
-            prefix = lines[cur_row][:cur_col]
+            line_str = lines[cur_row]
+            # Convert python string to utf-8 bytes to match C++ cursor_col (which is byte offset)
+            line_bytes = line_str.encode("utf-8")
+            if cur_col <= len(line_bytes):
+                # Slice bytes then decode back to string to measure partial width
+                prefix_bytes = line_bytes[:cur_col]
+                prefix = prefix_bytes.decode("utf-8", "ignore")
+            else:
+                 prefix = line_str
         
         cur_x = 10 + f.measure(prefix)
         cur_y = 10 + cur_row * line_h
