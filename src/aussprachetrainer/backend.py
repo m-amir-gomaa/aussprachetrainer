@@ -15,6 +15,7 @@ try:
     from kokoro_onnx import Kokoro
 except ImportError:
     Kokoro = None
+import re
 from typing import List, Dict, Optional
 from rapidfuzz import distance
 from aussprachetrainer.database import HistoryManager
@@ -102,14 +103,179 @@ class PronunciationBackend:
         ]
         return voices
 
+class GermanIPAProcessor:
+    @staticmethod
+    def process(ipa: str, text: str = "") -> str:
+        if not ipa:
+            return ""
+            
+        # 0. Formatting Refinement
+        ipa = ipa.replace("'", "ˈ").replace(",", "ˌ").replace(":", "ː")
+            
+        vowels = 'aeiouyøɛœɔɪʊɑɐə'
+        v_reg = f'[{vowels}]'
+        # 1. R Allophones
+        # Onset R: r or ɾ followed by a vowel or stress mark + vowel
+        ipa = re.sub(r'[rɾ]([ˈˌ]?' + v_reg + ')', r'ʁ\1', ipa)
+        # Coda R: r or ɾ not followed by a vowel pattern
+        ipa = re.sub(r'[rɾ](?![ˈˌ]?' + v_reg + ')', r'ɐ̯', ipa)
+        # Final -er
+        ipa = ipa.replace('ɜ', 'ɐ')
+        
+        # 2. Glottal Stop [ʔ]
+        ipa = re.sub(r'(^|\s)(' + v_reg + ')', r'\1ʔ\2', ipa)
+        ipa = re.sub(r'(^|\s|' + v_reg + ')([ˈˌ])(' + v_reg + ')', r'\1\2ʔ\3', ipa)
+        
+        # 3. Aspiration [ʰ]
+        ipa = re.sub(r'(?<![sʃ])ˈ([ptk])', r'ˈ\1ʰ', ipa)
+        ipa = re.sub(r'(?<![sʃ])(^|\s)([ptk])(ˈ?)', r'\1\2ʰ\3', ipa)
+        
+        # 4. Syllabic Consonants [n̩, l̩]
+        ipa = re.sub(r'əl($|\s|' + v_reg + '|[^' + vowels + '])', r'l̩\1', ipa)
+        ipa = re.sub(r'ən($|\s|' + v_reg + '|[^' + vowels + '])', r'n̩\1', ipa)
+        
+        # 5. Voiceless Lenis [b̥, d̥, g̊, v̥, z̥, ʒ̊]
+        ipa = ipa.replace('dʒ', 'ʒ') # Loanwords like Ingenieur
+        if text:
+            clean_text = re.sub(r'[^\w\s]', ' ', text).lower().split()
+            ipa_words = ipa.split()
+            processed_words = []
+            
+            for p_word, t_word in zip(ipa_words, clean_text):
+                # Final devoicing mapping
+                if t_word.endswith('b') and p_word.endswith('p'):
+                    p_word = p_word[:-1] + 'b̥'
+                elif t_word.endswith('d') and p_word.endswith('t'):
+                    p_word = p_word[:-1] + 'd̥'
+                elif t_word.endswith('g') and p_word.endswith('k'):
+                    p_word = p_word[:-1] + 'g̊'
+                elif t_word.endswith('v') and (p_word.endswith('f') or p_word.endswith('v')):
+                    p_word = p_word[:-1] + 'v̥'
+                elif t_word.endswith('s') and p_word.endswith('s'):
+                    if 'ː' in p_word or 'aɪ̯' in p_word or 'aʊ̯' in p_word or 'ɔʏ̯' in p_word:
+                        p_word = p_word[:-1] + 'z̥'
+                elif (t_word.endswith('e') and t_word.endswith('ge') and p_word.endswith('ə')) or (t_word == "garage" and p_word.endswith('ə')):
+                     if 'ɡ' in p_word:
+                         p_word = p_word.replace('ɡə', 'ʒ̊ə')
+                processed_words.append(p_word)
+            
+            if len(processed_words) == len(ipa_words):
+                ipa = " ".join(processed_words)
+
+        # 6. Diphthongs & Glides
+        # Static diphthong mapping
+        ipa = ipa.replace("aɪ", "aɪ̯").replace("aʊ", "aʊ̯").replace("ɔø", "ɔʏ̯").replace("ɔʏ", "ɔʏ̯")
+        
+        # Heuristic for glides [i̯, o̯, u̯]
+        # Rule A: High vowel following another vowel (and not already marked)
+        ipa = re.sub(r'(' + v_reg + '[ː]?|[ˈˌ]?' + v_reg + ')([iɪuʊo])(?!̯|ː)', r'\1\2̯', ipa)
+        # Rule B: High vowel preceding another vowel (e.g. Familie)
+        ipa = re.sub(r'([iɪuʊo])(?=' + v_reg + ')', r'\1̯', ipa)
+        
+        # 7. Clean up
+        ipa = ipa.replace('̯̯', '̯') # Fix any duplicates
+        ipa = ipa.replace('ɪ̯', 'i̯').replace('ʊ̯', 'u̯').replace('ɑ', 'a') # Normalize symbols
+        ipa = ipa.replace('ʔʔ', 'ʔ')
+        ipa = ipa.replace('ʁɐ̯', 'ɐ̯') # simplify combined R allophones
+        # Ensure all R's are captured if any missed
+        ipa = ipa.replace('r', 'ʁ').replace('ʀ', 'ʀ')
+        
+        return ipa.strip()
+
+class PronunciationBackend:
+    def __init__(self):
+        # Initialize offline TTS engine
+        self.engine = pyttsx3.init()
+        # History Manager
+        self.db = HistoryManager()
+        
+        # Persistent audio directory
+        self.audio_dir = os.path.expanduser("~/.local/share/aussprachetrainer/audio")
+        os.makedirs(self.audio_dir, exist_ok=True)
+        
+        # Session audio dir (temporary)
+        self.session_dir = tempfile.mkdtemp(prefix="aussprachetrainer_")
+        
+        # Piper models directory
+        self.models_dir = os.path.expanduser("~/.local/share/aussprachetrainer/models")
+        os.makedirs(self.models_dir, exist_ok=True)
+        
+        # Dialect state
+        self.dialect = "de-DE" # Standard German, de-AT, de-CH
+        
+        # Recording state
+        self.recording = False
+        self.recorded_frames = []
+        self.fs = 44100 # Change to 44.1kHz for better compatibility
+        self.last_audio_path = None
+
+    def set_dialect(self, code: str):
+        self.dialect = code
+
+    def _get_espeak_voice(self) -> str:
+        mapping = {"de-DE": "de", "de-AT": "de-at", "de-CH": "de-ch"}
+        return mapping.get(self.dialect, "de")
+        
+    def __del__(self):
+        if hasattr(self, 'session_dir') and os.path.exists(self.session_dir):
+            try: shutil.rmtree(self.session_dir)
+            except: pass
+
+    def get_voices(self) -> List[Dict[str, str]]:
+        try:
+            voices = self.engine.getProperty('voices')
+            voice_list = []
+            for v in voices:
+                is_german = 'german' in v.name.lower() or 'de' in v.languages or 'de-de' in v.id.lower() or 'de-at' in v.id.lower() or 'de-ch' in v.id.lower()
+                if is_german:
+                    voice_list.append({'id': v.id, 'name': v.name})
+            return voice_list
+        except: return []
+
+    def check_internet(self) -> bool:
+        """Check if internet connection is available"""
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=2)
+            return True
+        except OSError:
+            return False
+
+    def get_online_voices(self) -> List[Dict[str, str]]:
+        """Get available gTTS voices/accents for German"""
+        return [
+            {'id': 'de', 'name': 'German (Standard)'},
+            {'id': 'de-at', 'name': 'German (Austria)'},
+            {'id': 'de-ch', 'name': 'German (Switzerland)'},
+        ]
+
+    def get_offline_voices(self) -> List[Dict[str, str]]:
+        """Get available Kokoro, Piper and espeak-ng voices for German"""
+        voices = [
+            # Kokoro Neural Voices (Highest Quality)
+            {'id': 'kokoro:de_male', 'name': 'Kokoro German (Male)'},
+            {'id': 'kokoro:de_female', 'name': 'Kokoro German (Female)'},
+            # Piper Neural Voices (High Quality)
+            {'id': 'piper:de_DE-thorsten-high', 'name': 'Piper Thorsten (High)'},
+            {'id': 'piper:de_DE-thorsten-medium', 'name': 'Piper Thorsten (Medium)'},
+            {'id': 'piper:de_DE-karlsson-low', 'name': 'Piper Karlsson (Low)'},
+            # Espeak-ng fallback voices
+            {'id': 'de', 'name': 'espeak German (Standard)'},
+            {'id': 'de+m3', 'name': 'espeak German (Male 3)'},
+            {'id': 'de+f2', 'name': 'espeak German (Female 2)'},
+        ]
+        return voices
+
     def get_ipa(self, text: str) -> str:
         try:
+            voice = self._get_espeak_voice()
             result = subprocess.run(
-                ['espeak-ng', '-v', self._get_espeak_voice(), '-q', '--ipa', text],
+                ['espeak-ng', '-v', voice, '-q', '--ipa', text],
                 capture_output=True, text=True, check=True
             )
-            return result.stdout.strip()
-        except:
+            raw_ipa = result.stdout.strip()
+            return GermanIPAProcessor.process(raw_ipa, text)
+        except Exception as e:
+            print(f"DEBUG: get_ipa failed: {e}")
             return ""
 
     def generate_audio(self, text: str, online: bool = False, voice_id: str = None, online_voice: str = None) -> str:

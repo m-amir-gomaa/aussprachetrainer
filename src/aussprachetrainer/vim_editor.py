@@ -145,6 +145,49 @@ class VimEditor(ctk.CTkFrame):
         if is_alt and key == "r":
             return # Let App/GUI handle it
             
+        # GUI Shortcuts
+        if is_ctrl:
+            if key == "a":
+                self.zep.select_all()
+                self._render_vimbuffer()
+                return "break"
+            elif key == "c":
+                # Copy: if VISUAL, yank selection. if NORMAL, yank line?
+                # Actually, Zep handles yank_selection.
+                self.zep.yank_selection()
+                sys_clip = self.zep.get_clipboard()
+                if sys_clip:
+                    self.clipboard_clear()
+                    self.clipboard_append(sys_clip)
+                self._render_vimbuffer()
+                return "break"
+            elif key == "v":
+                # Paste: sync from system to Zep then paste
+                try:
+                    sys_clip = self.clipboard_get()
+                    if sys_clip:
+                        self.zep.paste_at_cursor(sys_clip)
+                except: pass
+                self._render_vimbuffer()
+                return "break"
+            elif key == "x":
+                # Cut
+                self.zep.delete_selection()
+                sys_clip = self.zep.get_clipboard()
+                if sys_clip:
+                    self.clipboard_clear()
+                    self.clipboard_append(sys_clip)
+                self._render_vimbuffer()
+                return "break"
+            elif key == "z":
+                self.zep.undo()
+                self._render_vimbuffer()
+                return "break"
+            elif key == "y":
+                self.zep.redo()
+                self._render_vimbuffer()
+                return "break"
+
         if is_ctrl and key in ("h", "p", "Return", "n"):
             if key == "n" and not getattr(app, "suggestions", None):
                 pass # Continue to Zep if no suggestions
@@ -156,7 +199,25 @@ class VimEditor(ctk.CTkFrame):
         if key == "Return" and getattr(app, "suggestions", None):
             return "break"
 
+        # Paste: sync from system to Zep before processing key
+        if not is_ctrl and mapped_key in ("p", "P"):
+            try:
+                sys_clip = self.clipboard_get()
+                if sys_clip:
+                    self.zep.set_clipboard(sys_clip)
+            except: pass
+
+        old_clip = self.zep.get_clipboard()
         self.zep.handle_key(mapped_key, event.state)
+        new_clip = self.zep.get_clipboard()
+        
+        # Yank/Delete: sync from Zep to system if changed
+        if new_clip != old_clip:
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(new_clip)
+            except: pass
+
         self._render_vimbuffer()
         return "break"
         

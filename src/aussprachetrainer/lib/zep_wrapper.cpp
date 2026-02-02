@@ -41,6 +41,39 @@ public:
     std::pair<int, int> get_cursor() const { return {cursor_row, cursor_col}; }
     std::pair<int, int> get_anchor() const { return {anchor_row, anchor_col}; }
 
+    std::string get_clipboard() const { return clipboard; }
+    void set_clipboard(const std::string& s) { clipboard = s; }
+
+    void select_all() {
+        mode = "VISUAL";
+        anchor_row = 0; anchor_col = 0;
+        cursor_row = (int)get_line_count() - 1;
+        cursor_col = get_line_length(cursor_row);
+    }
+
+    void paste_at_cursor(const std::string& s) {
+        save_undo();
+        size_t pos = get_cursor_pos();
+        text.insert(pos, s);
+        // Update cursor row/col by scanning s
+        for (char c : s) {
+            if (c == '\n') {
+                cursor_row++;
+                cursor_col = 0;
+            } else {
+                cursor_col++;
+            }
+        }
+        update_cursor_bounds();
+    }
+
+    void yank_selection_public() { yank_selection(); }
+    void delete_selection_public() { yank_selection(); delete_selection(); }
+    void put_after_public() { put_after(); }
+    void put_before_public() { put_before(); }
+    void undo_public() { perform_undo(); }
+    void redo_public() { perform_redo(); }
+
 private:
     std::string text;
     std::string mode;
@@ -96,7 +129,6 @@ private:
                 }
             }
             mode = "NORMAL";
-            save_undo();
             return;
         }
 
@@ -523,7 +555,7 @@ private:
     void handle_line_operation(const std::string& op) {
         save_undo();
         std::vector<std::string> lines = get_lines();
-        if (cursor_row < lines.size()) {
+        if ((size_t)cursor_row < lines.size()) {
             if (op == "y") {
                 clipboard = lines[cursor_row] + "\n";
             } else {
@@ -539,7 +571,7 @@ private:
         if (clipboard.empty()) return;
         std::vector<std::string> lines = get_lines();
         if (clipboard.back() == '\n') { // Line put
-            if (cursor_row < lines.size()) lines.insert(lines.begin() + cursor_row + 1, clipboard.substr(0, clipboard.length()-1));
+            if ((size_t)cursor_row < lines.size()) lines.insert(lines.begin() + cursor_row + 1, clipboard.substr(0, clipboard.length()-1));
             else lines.push_back(clipboard.substr(0, clipboard.length()-1));
             rebuild_text(lines);
             cursor_row++;
@@ -562,7 +594,7 @@ private:
 
     void join_lines() {
         std::vector<std::string> lines = get_lines();
-        if (cursor_row < lines.size() - 1) {
+        if ((size_t)cursor_row < lines.size() - 1) {
             lines[cursor_row] += " " + lines[cursor_row+1];
             lines.erase(lines.begin() + cursor_row + 1);
             rebuild_text(lines);
@@ -744,5 +776,15 @@ PYBIND11_MODULE(zep_vim, m) {
         .def("get_mode", &ZepVim::get_mode)
         .def("get_cursor", &ZepVim::get_cursor)
         .def("get_anchor", &ZepVim::get_anchor)
+        .def("get_clipboard", &ZepVim::get_clipboard)
+        .def("set_clipboard", &ZepVim::set_clipboard)
+        .def("select_all", &ZepVim::select_all)
+        .def("paste_at_cursor", &ZepVim::paste_at_cursor)
+        .def("yank_selection", &ZepVim::yank_selection_public)
+        .def("delete_selection", &ZepVim::delete_selection_public)
+        .def("put_after", &ZepVim::put_after_public)
+        .def("put_before", &ZepVim::put_before_public)
+        .def("undo", &ZepVim::undo_public)
+        .def("redo", &ZepVim::redo_public)
         .def("replace_current_word", &ZepVim::replace_current_word);
 }
