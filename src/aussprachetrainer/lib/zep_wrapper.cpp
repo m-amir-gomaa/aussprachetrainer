@@ -144,13 +144,20 @@ private:
 
         // Replacement handling for 'r'
         if (pending_operator == "r") {
-            if (key.length() == 1) {
+            if (key.length() == 1 || (key.length() > 1 && (unsigned char)key[0] > 127)) {
                 save_undo();
                 for (int i=0; i<pending_count; ++i) {
                     size_t pos = get_cursor_pos();
                     if (pos < text.length() && text[pos] != '\n') {
-                        text[pos] = key[0];
-                        if (i < pending_count - 1) move_cursor(0, 1);
+                        // Replace exactly one UTF-8 character at current position
+                        unsigned char c = (unsigned char)text[pos];
+                        int current_char_len = get_utf8_len(c);
+                        text.replace(pos, current_char_len, key);
+                        
+                        if (i < pending_count - 1) {
+                            // Move cursor after the inserted character specifically
+                            cursor_col += key.length();
+                        }
                     }
                 }
             }

@@ -205,7 +205,7 @@ class App(ctk.CTk):
         
         # Global Bindings
         self.bind('<Control-Return>', lambda e: self.generate())
-        self.bind('<Control-r>', lambda e: self.toggle_recording())
+        self.bind('<Alt-r>', lambda e: self.toggle_recording())
         self.bind('<Control-p>', lambda e: self.backend.play_file(self.backend.last_audio_path) if hasattr(self.backend, "last_audio_path") else None)
         self.bind('<Control-h>', lambda e: self.toggle_history_panel())
         self.bind('<F11>', lambda e: self.toggle_fullscreen())
@@ -410,7 +410,7 @@ class App(ctk.CTk):
                                         font=ctk.CTkFont(size=12, weight="bold"), text_color=THEME["green"])
         self.token_label.grid(row=18, column=0, padx=25, pady=(10, 0), sticky="w")
         
-        self.api_info = ctk.CTkLabel(self.sidebar, text="API: Local / Google (Free)\nKey: [NOT REQUIRED]", 
+        self.api_info = ctk.CTkLabel(self.sidebar, text="API: Local / Google (Free)\nKey: [NOT REQUIRED]\nRecording: Alt+r", 
                                        font=ctk.CTkFont(size=11), justify="left", text_color=THEME["muted"])
         self.api_info.grid(row=19, column=0, padx=25, pady=(5, 20), sticky="w")
 

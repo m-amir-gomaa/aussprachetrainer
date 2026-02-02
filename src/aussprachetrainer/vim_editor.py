@@ -138,7 +138,14 @@ class VimEditor(ctk.CTkFrame):
             return # Let gui handle it
             
         # Allow global shortcuts to propagate to App
-        if (event.state & 0x4) and key in ("h", "r", "p", "Return", "n"):
+        is_ctrl = bool(event.state & 0x4)
+        is_alt = bool(event.state & (0x8 | 0x80 | 0x20000))
+        
+        # Specifically passthrough Alt+r for recording
+        if is_alt and key == "r":
+            return # Let App/GUI handle it
+            
+        if is_ctrl and key in ("h", "p", "Return", "n"):
             if key == "n" and not getattr(app, "suggestions", None):
                 pass # Continue to Zep if no suggestions
             else:
