@@ -47,6 +47,7 @@ class VimEditor(ctk.CTkFrame):
         self.canvas.bind("<KeyPress>", self._on_key_press)
         self.canvas.bind("<KeyRelease>", self._on_key_release)
         self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
+        self.canvas.bind("<FocusIn>", self._on_focus_in)
         
         self.font = ("Roboto Mono", 16)
         self.cursor_visible = True
@@ -62,6 +63,31 @@ class VimEditor(ctk.CTkFrame):
         self.after(500, self._blink_cursor)
 
 
+    def _sync_from_system_clipboard(self):
+        try:
+            sys_clip = self.clipboard_get()
+            if sys_clip:
+                self.zep.set_clipboard(sys_clip)
+        except:
+            pass
+
+    def _sync_to_system_clipboard(self):
+        new_clip = self.zep.get_clipboard()
+        try:
+            # We use a try-except to handle cases where clipboard might be locked
+            # but we also check if we actually need to update to avoid infinite loops if it were bidirectional
+            # For now, we trust Zep's internal state as the source of truth after a command.
+            if new_clip:
+                self.clipboard_clear()
+                self.clipboard_append(new_clip)
+                self.update() # Force processing of clipboard events
+        except:
+            pass
+
+    def _on_focus_in(self, event):
+        self._sync_from_system_clipboard()
+        self._render_vimbuffer()
+
     def _on_key_press(self, event):
         app = self.winfo_toplevel()
         key = event.keysym
@@ -72,115 +98,79 @@ class VimEditor(ctk.CTkFrame):
             return "break"
             
         # Handle Alt+Key for German Umlauts in Insert Mode
-        # Robust Alt detection: Mod1 (0x8), Mod5 (0x80), or Extended Alt (0x20000)
         is_alt = bool(event.state & (0x8 | 0x80 | 0x20000))
         if self.zep.get_mode() == "INSERT" and is_alt:
-            # Special logic for Eszett: Alt+s+s -> ß
+            # ... (umlaut logic remains same)
             if key in ("s", "S"):
                 text = self.zep.get_text()
-                row, col = self.zep.get_cursor() # col is byte offset
+                row, col = self.zep.get_cursor()
                 lines = text.split("\n")
                 if row < len(lines):
                     line_bytes = lines[row].encode("utf-8")
-                    # Check if the byte immediately before cursor is 's' or 'S'
                     if col > 0 and line_bytes[col-1:col] == key.encode("utf-8"):
-                        # Replace previous s with ß
                         self.zep.handle_key("BackSpace", 0)
                         self.zep.handle_key("ß" if key == "s" else "ẞ", 0)
                         self._render_vimbuffer()
                         return "break"
-                # Otherwise just insert s/S
                 self.zep.handle_key(key, 0)
                 self._render_vimbuffer()
                 return "break"
 
-            umlaut_map = {
-                "a": "ä", "A": "Ä",
-                "o": "ö", "O": "Ö",
-                "u": "ü", "U": "Ü"
-            }
+            umlaut_map = {"a": "ä", "A": "Ä", "o": "ö", "O": "Ö", "u": "ü", "U": "Ü"}
             if key in umlaut_map:
-                # Pass the character with 0 modifiers to treat it as a normal keypress
                 self.zep.handle_key(umlaut_map[key], 0)
                 self._render_vimbuffer()
                 return "break"
 
         # Map some common keys
         key_map = {
-            "comma": ",",
-            "period": ".",
-            "semicolon": ":",
-            "colon": ":",
-            "slash": "/",
-            "question": "?",
-            "backslash": "\\",
-            "bracketleft": "[",
-            "bracketright": "]",
-            "braceleft": "{",
-            "braceright": "}",
-            "minus": "-",
-            "equal": "=",
-            "plus": "+",
-            "underscore": "_",
-            "space": " ",
-            "quotedbl": '"',
-            "quoteright": "'",
-            "Left": "h",
-            "Right": "l",
-            "Up": "k",
-            "Down": "j",
-            "dollar": "$",
+            "comma": ",", "period": ".", "semicolon": ":", "colon": ":",
+            "slash": "/", "question": "?", "backslash": "\\",
+            "bracketleft": "[", "bracketright": "]", "braceleft": "{", "braceright": "}",
+            "minus": "-", "equal": "=", "plus": "+", "underscore": "_",
+            "space": " ", "quotedbl": '"', "quoteright": "'",
+            "Left": "h", "Right": "l", "Up": "k", "Down": "j", "dollar": "$",
         }
         mapped_key = key_map.get(key, key)
         
-        # If autocomplete is active and Ctrl+n/p are pressed, we let the GUI handle it
         if self.on_key_release and (event.state & 0x4) and key in ("n", "p"):
-            return # Let gui handle it
+            return 
             
-        # Allow global shortcuts to propagate to App
         is_ctrl = bool(event.state & 0x4)
         is_alt = bool(event.state & (0x8 | 0x80 | 0x20000))
         
-        # Specifically passthrough Alt+r for recording
         if is_alt and key == "r":
-            return # Let App/GUI handle it
+            return
             
-        # GUI Shortcuts
+        # GUI Shortcuts (Ctrl+C, V, X, A, Z, Y)
         if is_ctrl:
             if key == "a":
                 self.zep.select_all()
                 self._render_vimbuffer()
                 return "break"
             elif key == "c":
-                # Copy: if VISUAL, yank selection. if NORMAL, yank line?
-                # Actually, Zep handles yank_selection.
                 self.zep.yank_selection()
-                sys_clip = self.zep.get_clipboard()
-                if sys_clip:
-                    self.clipboard_clear()
-                    self.clipboard_append(sys_clip)
+                self._sync_to_system_clipboard()
                 self._render_vimbuffer()
                 return "break"
             elif key == "v":
-                # Paste: sync from system to Zep then paste
-                try:
-                    sys_clip = self.clipboard_get()
-                    if sys_clip:
-                        self.zep.paste_at_cursor(sys_clip)
-                except: pass
+                self._sync_from_system_clipboard()
+                sys_clip = self.zep.get_clipboard()
+                if sys_clip:
+                    self.zep.paste_at_cursor(sys_clip)
                 self._render_vimbuffer()
                 return "break"
             elif key == "x":
-                # Cut
                 self.zep.delete_selection()
-                sys_clip = self.zep.get_clipboard()
-                if sys_clip:
-                    self.clipboard_clear()
-                    self.clipboard_append(sys_clip)
+                self._sync_to_system_clipboard()
                 self._render_vimbuffer()
                 return "break"
             elif key == "z":
                 self.zep.undo()
+                self._render_vimbuffer()
+                return "break"
+            elif key == "Z": # Ctrl+Shift+Z
+                self.zep.redo()
                 self._render_vimbuffer()
                 return "break"
             elif key == "y":
@@ -190,33 +180,24 @@ class VimEditor(ctk.CTkFrame):
 
         if is_ctrl and key in ("h", "p", "Return", "n"):
             if key == "n" and not getattr(app, "suggestions", None):
-                pass # Continue to Zep if no suggestions
+                pass 
             else:
-                return # Let App/GUI handle it
+                return 
             
-        # If Return is pressed and suggestions are active, block it in KeyPress
-        # so it doesn't enter newline, and GUI handles it in KeyRelease
         if key == "Return" and getattr(app, "suggestions", None):
             return "break"
 
-        # Paste: sync from system to Zep before processing key
+        # Normal mode paste (p, P) syncs FROM system first
         if not is_ctrl and mapped_key in ("p", "P"):
-            try:
-                sys_clip = self.clipboard_get()
-                if sys_clip:
-                    self.zep.set_clipboard(sys_clip)
-            except: pass
+            self._sync_from_system_clipboard()
 
-        old_clip = self.zep.get_clipboard()
+        # Process key in Zep
         self.zep.handle_key(mapped_key, event.state)
-        new_clip = self.zep.get_clipboard()
         
-        # Yank/Delete: sync from Zep to system if changed
-        if new_clip != old_clip:
-            try:
-                self.clipboard_clear()
-                self.clipboard_append(new_clip)
-            except: pass
+        # After any key, if it might have changed clipboard, sync TO system
+        # (Actually we can just always check if Zep's clipboard changed)
+        # But to be safe and robust, we sync any time Zep's internal clipboard is updated.
+        self._sync_to_system_clipboard()
 
         self._render_vimbuffer()
         return "break"

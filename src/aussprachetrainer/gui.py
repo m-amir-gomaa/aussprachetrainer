@@ -62,7 +62,7 @@ class SectionHeader(ctk.CTkFrame):
         self.line.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
 
 class HistoryItem(ctk.CTkFrame):
-    def __init__(self, master, entry_id, text, ipa, audio_path, play_callback, delete_callback, click_callback, font_size, **kwargs):
+    def __init__(self, master, entry_id, text, ipa, audio_path, play_callback, delete_callback, click_callback, font_size, font_family, **kwargs):
         super().__init__(master, fg_color=THEME["card_bg"], border_width=1, border_color=THEME["border"], corner_radius=8, **kwargs)
         self.entry_id = entry_id
         self.audio_path = audio_path
@@ -76,21 +76,40 @@ class HistoryItem(ctk.CTkFrame):
         content_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
         content_frame.grid_columnconfigure(0, weight=1)
         
-        self.label = ctk.CTkLabel(content_frame, text=f"\"{text}\"", 
-                                  anchor="w", justify="left",
-                                  font=ctk.CTkFont(size=font_size-1, weight="bold"),
-                                  text_color=THEME["fg"])
-        self.label.grid(row=0, column=0, sticky="w")
+        # We use tk.Text for selectable, non-editable text that feels premium
+        import tkinter as tk
         
-        self.ipa_label = ctk.CTkLabel(content_frame, text=f"/{ipa}/", 
-                                      anchor="w", justify="left",
-                                      font=ctk.CTkFont(size=font_size-3),
-                                      text_color=THEME["blue"])
-        self.ipa_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        # Text Label
+        self.label = tk.Text(content_frame, height=1, font=(font_family, font_size-1, "bold"),
+                           bg=THEME["card_bg"], fg=THEME["fg"], bd=0, highlightthickness=0,
+                           padx=0, pady=0, cursor="xterm", exportselection=True,
+                           selectbackground=THEME["accent"], selectforeground="#11111b",
+                           inactiveselectbackground=THEME["border"], wrap="word")
+        self.label.insert("1.0", f"\"{text}\"")
+        self.label.configure(state="disabled")
+        self.label.grid(row=0, column=0, sticky="ew")
         
-        # Bind click events
-        for widget in [self, self.label, self.ipa_label, content_frame]:
-            widget.bind("<Button-1>", lambda e: click_callback(self.text))
+        # IPA Label
+        self.ipa_label = tk.Text(content_frame, height=1, font=(font_family, font_size-3),
+                               bg=THEME["card_bg"], fg=THEME["blue"], bd=0, highlightthickness=0,
+                               padx=0, pady=0, cursor="xterm", exportselection=True,
+                               selectbackground=THEME["accent"], selectforeground="#11111b",
+                               inactiveselectbackground=THEME["border"], wrap="word")
+        self.ipa_label.insert("1.0", f"/{ipa}/")
+        self.ipa_label.configure(state="disabled")
+        self.ipa_label.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        
+        # Bind click events (keeping click-to-load functionality)
+        # We bind to <Button-1> but don't want to block selection
+        def on_click(e):
+            if self.label.tag_ranges("sel") or self.ipa_label.tag_ranges("sel"):
+                return # Don't load if user is selecting
+            click_callback(self.text)
+
+        self.bind("<Button-1>", lambda e: click_callback(self.text))
+        # For the text fields, we only trigger load if it's a quick click without selection
+        self.label.bind("<ButtonRelease-1>", on_click)
+        self.ipa_label.bind("<ButtonRelease-1>", on_click)
         
         # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -109,9 +128,16 @@ class HistoryItem(ctk.CTkFrame):
         self.delete_button.pack(side="left", padx=2)
 
     def update_wraplength(self, width):
-        # Dynamically adjust wraplength based on available width minus button space
-        new_wrap = max(50, width - 100)
-        self.label.configure(wraplength=new_wrap)
+        # Dynamically adjust height of tk.Text based on line wrapping
+        # tk.Text doesn't have wraplength, it uses width in characters.
+        # We approximate character width.
+        char_w = 10 # approximate
+        new_width = max(10, (width - 100) // char_w)
+        self.label.configure(width=new_width)
+        self.ipa_label.configure(width=new_width)
+        # Recalculate height
+        self.label.configure(height=int(self.label.index("end-1c").split(".")[0]))
+        self.ipa_label.configure(height=int(self.ipa_label.index("end-1c").split(".")[0]))
 
 class App(ctk.CTk):
     def __init__(self):
@@ -187,6 +213,13 @@ class App(ctk.CTk):
         self.autocomplete_debounce_ms = 600
 
         self._create_sidebar()
+        
+        # Undo/Redo State for History Search
+        self.search_undo_stack = []
+        self.search_redo_stack = []
+        self.search_last_push_text = ""
+        self._in_search_undo_redo = False
+        self._search_push_timer = None
         self._create_main_area()
         self._create_history_panel()
 
@@ -502,6 +535,17 @@ class App(ctk.CTk):
         self.search_entry.grid(row=1, column=0, padx=15, pady=(10, 10), sticky="ew")
         self.search_entry.bind('<KeyRelease>', lambda e: self._refresh_history())
         
+        # Web-like Shortcuts for Search Entry
+        self.search_entry.bind('<Control-a>', lambda e: self._entry_select_all(self.search_entry))
+        self.search_entry.bind('<Control-BackSpace>', lambda e: self._entry_delete_word_back(self.search_entry))
+        self.search_entry.bind('<Control-Delete>', lambda e: self._entry_delete_word_forward(self.search_entry))
+        self.search_entry.bind('<Control-c>', lambda e: self.search_entry.event_generate("<<Copy>>"))
+        self.search_entry.bind('<Control-v>', lambda e: self.search_entry.event_generate("<<Paste>>"))
+        self.search_entry.bind('<Control-x>', lambda e: self.search_entry.event_generate("<<Cut>>"))
+        self.search_entry.bind('<Control-z>', self._search_undo)
+        self.search_entry.bind('<Control-Shift-Z>', self._search_redo)
+        self.search_entry.bind('<Key>', self._on_search_key_press)
+        
         # Ensure scrollable frame matches premium look
         self.history_scroll = ctk.CTkScrollableFrame(self.history_frame, fg_color="transparent")
         self.history_scroll.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
@@ -775,7 +819,7 @@ class App(ctk.CTk):
         
         for e in entries:
             HistoryItem(self.history_scroll, e['id'], e['text'], e['ipa'], e['audio_path'],
-                        self.backend.play_file, self._delete_entry, self._handle_history_click, self.font_size).pack(fill="x", pady=2, padx=5)
+                        self.backend.play_file, self._delete_entry, self._handle_history_click, self.font_size, self.font_family).pack(fill="x", pady=2, padx=5)
 
     def _confirm_clear_history(self):
         # Simple confirmation using a mock dialog or status update since CTk doesn't have a built-in confirm
@@ -1056,13 +1100,125 @@ class App(ctk.CTk):
         
         for entry in entries:
             item = HistoryItem(self.history_scroll, entry['id'], entry['text'], entry['ipa'], entry['audio_path'],
-                               self.backend.play_file, self._delete_entry, self.input_text.set_text, self.font_size)
+                               self.backend.play_file, self._delete_entry, self.input_text.set_text, self.font_size, self.font_family)
             item.pack(fill="x", pady=5, padx=5)
             self.history_items.append(item)
         
         self.search_entry.bind("<KeyPress-j>", self._on_history_key)
         self.search_entry.bind("<KeyPress-k>", self._on_history_key)
         self.search_entry.bind("<Return>", self._on_history_key)
+
+    def _entry_select_all(self, entry):
+        entry.select_range(0, 'end')
+        entry.icursor('end')
+        return "break"
+
+    def _entry_delete_word_back(self, entry):
+        """Standard Ctrl+Backspace implementation for Entry."""
+        pos = entry.index("insert")
+        if pos == 0: return "break"
+        text = entry.get()
+        # Find start of word
+        new_pos = pos - 1
+        while new_pos > 0 and text[new_pos-1] == " ": new_pos -= 1
+        while new_pos > 0 and text[new_pos-1] != " ": new_pos -= 1
+        entry.delete(new_pos, pos)
+        return "break"
+
+    def _entry_delete_word_forward(self, entry):
+        """Standard Ctrl+Delete implementation for Entry."""
+        pos = entry.index("insert")
+        text = entry.get()
+        if pos == len(text): return "break"
+        # Find end of word
+        new_pos = pos
+        while new_pos < len(text) and text[new_pos] == " ": new_pos += 1
+        while new_pos < len(text) and text[new_pos] != " ": new_pos += 1
+        entry.delete(pos, new_pos)
+        return "break"
+
+    def _on_search_key_press(self, event):
+        # We push state BEFORE most keys, but we need to wait for the key to be processed
+        # to get the NEW text for _refresh_history.
+        # So we just reset the push timer.
+        if event.keysym in ["Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Alt_R"]:
+            return
+            
+        if event.state & 4: # Control is pressed
+            if event.keysym.lower() in ["z", "y", "v", "x"]:
+                # These will trigger a change soon, or we handle them
+                pass
+        
+        if self._search_push_timer:
+            self.after_cancel(self._search_push_timer)
+        self._search_push_timer = self.after(500, self._search_push_state)
+
+    def _search_push_state(self):
+        if self._in_search_undo_redo:
+            return
+            
+        current_text = self.search_entry.get()
+        cursor_pos = self.search_entry.index("insert")
+        
+        if current_text == self.search_last_push_text:
+            return
+            
+        # Initial push if empty
+        if not self.search_undo_stack and self.search_last_push_text == "":
+            self.search_undo_stack.append(("", 0))
+
+        self.search_undo_stack.append((current_text, cursor_pos))
+        if len(self.search_undo_stack) > 100:
+            self.search_undo_stack.pop(0)
+            
+        self.search_last_push_text = current_text
+        self.search_redo_stack.clear()
+        self._search_push_timer = None
+
+    def _search_undo(self, event=None):
+        if len(self.search_undo_stack) <= 1:
+            return "break"
+            
+        # Save current state to redo if it's the latest
+        current_text = self.search_entry.get()
+        cursor_pos = self.search_entry.index("insert")
+        
+        # If we were typing and haven't pushed yet, push now to redo
+        if current_text != self.search_last_push_text:
+             self.search_redo_stack.append((current_text, cursor_pos))
+        else:
+             # Just pop the current state from undo and put it in redo
+             self.search_redo_stack.append(self.search_undo_stack.pop())
+             
+        if not self.search_undo_stack:
+            return "break"
+            
+        prev_text, prev_cursor = self.search_undo_stack[-1]
+        
+        self._in_search_undo_redo = True
+        self.search_entry.delete(0, "end")
+        self.search_entry.insert(0, prev_text)
+        self.search_entry.icursor(prev_cursor)
+        self.search_last_push_text = prev_text
+        self._refresh_history()
+        self._in_search_undo_redo = False
+        return "break"
+
+    def _search_redo(self, event=None):
+        if not self.search_redo_stack:
+            return "break"
+            
+        next_text, next_cursor = self.search_redo_stack.pop()
+        self.search_undo_stack.append((next_text, next_cursor))
+        
+        self._in_search_undo_redo = True
+        self.search_entry.delete(0, "end")
+        self.search_entry.insert(0, next_text)
+        self.search_entry.icursor(next_cursor)
+        self.search_last_push_text = next_text
+        self._refresh_history()
+        self._in_search_undo_redo = False
+        return "break"
 
     def _close_suggestions(self, event=None):
         if self.suggestion_window: self.suggestion_window.withdraw()
